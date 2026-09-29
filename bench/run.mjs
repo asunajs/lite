@@ -1,18 +1,14 @@
 /**
- * 一条命令跑完 demo 自测：**编译 TSX → 无头 Chrome 打开 → 打印断言结果**。
+ * 一条命令跑完 bench：**编译 → 无头 Chrome → 打印耗时表 + 行为断言**。
  *
- * 为什么要这个脚本：断言只有在浏览器里跑才有意义（要真 DOM、真 `insertBefore`），
- * 而每次手敲 chrome 命令行既容易漏（先 `--dump-dom` 再 grep）又会踩
- * 该脚本记下来的那三个抓取坑（原记在迁移期的 `regress/compare.mjs` 里，
- * 那个脚本 2026-09-30 随 Vue 兼容层一起删了）。这里把"抓"这件事收在一处。
+ * 退出码非 0 的条件：页面抛错、任一断言 FAIL、或者数字明显不对
+ * （挂载 1000 行 > 500ms —— 那通常意味着某处从"搬节点"退化成"重建整表"，
+ * 与其说是慢，不如说是回归）。
  *
- * 用法：`node lite/demo/run.mjs`（退出码非 0 = 有断言失败）
+ * 用法：`node lite/bench/run.mjs`
  */
 import { execFileSync, spawn } from 'node:child_process'
 
-// 导入即构建：写 /tmp/lite-demo.html（见 build.mjs）。它内部是同步 execFileSync，
-// 但本进程**没有**在跑的 HTTP 服务，所以不存在迁移期那套（`regress/compare.mjs`，已删）
-// 里那种"阻塞事件循环互锁"。
 await import('./build.mjs')
 
 const chromePath = execFileSync(
@@ -23,12 +19,11 @@ const chromePath = execFileSync(
 
 const dump = () =>
   new Promise((resolve) => {
-    const child = spawn(chromePath, ['--user-data-dir=/tmp/lite-demo-profile', '--headless', '--disable-gpu', '--virtual-time-budget=8000', '--dump-dom', 'file:///tmp/lite-demo.html'], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const child = spawn(chromePath, ['--user-data-dir=/tmp/lite-bench-profile', '--headless', '--disable-gpu', '--virtual-time-budget=10000', '--dump-dom', 'file:///tmp/lite-bench.html'], { stdio: ['ignore', 'pipe', 'ignore'] })
     let out = ''
     child.stdout.on('data', (d) => {
       out += d
     })
-    // 护栏：页面里若有渲染死循环，chrome 不会自己退出（这个脚本存在的原因之一）
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       resolve(out)
@@ -55,4 +50,10 @@ if (!result) {
   process.exit(1)
 }
 console.log(result)
-if (result.includes('FAIL')) process.exit(1)
+
+const mountMs = Number((result.match(/挂载 1000 行.*?([\d.]+)ms\s*$/m) || [])[1] ?? NaN)
+const inflated = Number.isFinite(mountMs) && mountMs > 500
+if (result.includes('FAIL') || err || inflated) {
+  if (inflated) console.log(`\n⚠ 挂载耗时 ${mountMs}ms 异常偏大 —— 先怀疑列表退化成整表重建。`)
+  process.exit(1)
+}
