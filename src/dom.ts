@@ -1,18 +1,13 @@
 /**
- * DOM 层。
- *
- * 核心思路：**编译期把静态结构变成一行 HTML 字符串，运行期只做动态那几下**。
+ * DOM 层。核心思路：**编译期把静态结构变成一行 HTML 字符串，运行期只做动态那几下**。
  *
  * * 静态结构 → `template()` 在**模块加载时**解析一次，之后每个实例只 `cloneNode`。
  * * 动态文本/属性 → 编译期生成 `effect(() => ...)`，只写那一个节点、那一个属性。
- * * 事件 → 编译期知道事件名，运行期就是一次 `addEventListener`，没有包装层。
+ * * 事件 → 事件名编译期已知，运行期就是一次 `addEventListener`，没有包装层。
  *
- * **没有虚拟 DOM**：整棵树自始至终都是真实节点，更新是"指哪儿改哪儿"，
- * 不存在 diff、也没有 vnode 对象。
- *
- * 路径也是编译期算好的：`el.firstChild.nextSibling` 这类取值由编译器生成源码，
- * 运行时不带任何"按标记找插槽"的遍历代码（这是省字节的大头 —— Solid 用
- * `<!--$-->` 注释锚点，我们连那个都省了）。
+ * **没有虚拟 DOM**：整棵树自始至终都是真实节点，更新"指哪儿改哪儿"，没有 diff 与 vnode。
+ * 节点路径也由编译期算好（`el.firstChild.nextSibling` 直接写进源码），运行时不带
+ * "按标记找插槽"的遍历 —— 这是省字节的大头（Solid 用 `<!--$-->` 注释锚点，这里连它都省了）。
  */
 
 import { DEV } from './dev'
@@ -29,10 +24,8 @@ export function createNodes(v: unknown): Nodes {
 }
 
 /**
- * 把一个静态 HTML 串变成"克隆工厂"。
- *
- * 编译期生成、模块级只调用一次；`cloneNode(true)` 比 `innerHTML` 快一个量级，
- * 而且不用每次重新解析。
+ * 把一个静态 HTML 串变成"克隆工厂"：编译期生成、模块级只调用一次。
+ * `cloneNode(true)` 比 `innerHTML` 快一个量级，且不用每次重新解析。
  */
 export function template(html: string): () => Node {
   const box = document.createElement('template')
@@ -44,26 +37,13 @@ export function template(html: string): () => Node {
 /**
  * 谁拥有哪个 effect：`parent` 被移除时，它名下的 effect 全部销毁。
  *
- * ⚠⚠ 这条记账是**必需**的，不是优化。少了它，被移除子树里的 effect 还订阅着全局信号
- * （`authState` / toast / 后端状态），信号一变就拿着**已不在文档里**的 parent/anchor
- * 去 `insertBefore`，直接抛
- * `Failed to execute 'insertBefore' on 'Node': … is not a child of this node`。
- * 真机（切页 + 全局状态更新）就会撞到 —— fixture 数据静止，所以三条闸门都没照出来。
- */
-/**
- * 谁拥有这些 effect（父节点 → 它名下的 effect 列表）。
+ * ⚠⚠ 这条记账是**必需**的，不是优化：少了它，被移除子树里的 effect 仍订阅着全局信号，
+ * 信号一变就拿着**已不在文档里**的 `parent`/`anchor` 去 `insertBefore`，直接抛
+ * `… is not a child of this node`。见 `docs/pitfalls.md`「effect 的归属：什么时候必须销毁」。
  *
- * ⚠⚠ **`WeakMap` 不是 `Map`**（2026-10-02，用户报「前端 js 内存又从 4M 涨到 8M」）。
- *
- * 实测到的泄漏链条：页面异步拿到数据时**用户已经切走了** ⇒ `setNodes` 往一棵
- * **已脱离文档**的父节点上登记 effect ⇒ 父节点成了这里的**键** ✗ `Map` 强引用它
- * ⇒ 整棵子树（实测：设置页每次访问留 5 个 `OPTION`+1 个 `SELECT`，10 次就是 50+10）
- * 连同监听器永远活着 ✗。泄漏页正是"异步加载数据"的那四个（任务/设置/兑换/直播），
- * 同步渲染的页面一个都不漏 —— 这条对应关系就是它。
- *
- * `WeakMap` 的语义正好治这个：**值（effect → 闭包 → 父节点）反过来引用键**时，
- * 键仍可被回收（ephemeron 规则）⇒ 登记不再构成"活着"的理由 ✓。
- * 表里只做按键的 get/set/delete/has，不需要遍历，所以换掉是等价的 ✓。
+ * ⚠⚠ 必须是 `WeakMap` 而不是 `Map`：`setNodes` 会把 effect 登记到**已脱离文档**的父节点上
+ * （异步数据回来时视图早被换掉）⇒ 父节点成了键，`Map` 强引用整棵子树。`WeakMap` 的
+ * ephemeron 规则让"值反过来引用键"不阻碍回收，且这里只做按键的 get/set/delete/has。
  */
 const owners = new WeakMap<Node, Effect[]>()
 
@@ -74,12 +54,9 @@ function own(parent: Node, eff: Effect): void {
     return
   }
   /**
-   * ⚠⚠ 顺手把**已销毁**的 effect 清出去（2026-10-02 内存泄漏修复）。
-   *
-   * 原先这里是 `list.push(eff)` —— 只长不消 ✗。长命的父节点（比如切页时被复用的容器）
-   * 每挂一次新内容就攒一条，攒下来的都是死 effect；而**死 effect 的闭包仍然攥着
-   * 它当年铺进 DOM 的那批节点**（`setNodes` 里的 `cur`）⇒ 即使那棵子树早就脱离了
-   * 文档，也一直被拽着 ✗。实测：任务页/兑换页切 10 个来回，浏览器 DOM 计数还涨 2500+。
+   * ⚠⚠ 顺手把**已销毁**的 effect 清出去：长命的父节点每挂一次新内容就攒一条死 effect，
+   * 而死 effect 的闭包仍攥着它当年铺进 DOM 的那批节点（`setNodes` 的 `cur`）⇒ 子树早脱离
+   * 文档也一直被拽着。
    */
   const alive = list.filter((e) => !e.disposed)
   alive.push(eff)
@@ -96,17 +73,9 @@ function disposeTree(node: Node): void {
     for (const eff of list) eff.dispose()
   }
   /**
-   * ⚠⚠ 卸载钩子也必须**按整棵子树**收（2026-10-02 内存泄漏修复）。
-   *
-   * 原先只有 `remove(nodes)` 里那一句"取 `nodes[0]` 那把 key"会跑钩子 ⇒
-   * 父级摘整棵子树时，**子组件登记的 `onUnmounted` 永远不跑** ✗：
-   *   * 里面 `clearInterval` / 关 `EventSource` 的收尾全部落空
-   *     （设置页那个 ticker 就是这么活到刷新为止的）；
-   *   * 而且登记表里那条会一直拽着子树不放 —— 一个会话切几十次页，
-   *     正好就是用户看到的「4M → 8M」。
-   *
-   * 递归顺序是**父先子后**：`disposeTree` 本来就是从这个方向往下走的
-   * （effect 的销毁顺序与它一致），钩子跟着走，语义才统一。
+   * ⚠⚠ 卸载钩子也必须**按整棵子树**收：只在 `remove(nodes)` 里取 `nodes[0]` 那把 key
+   * 跑钩子的话，父级摘整棵子树时**子组件登记的 `onUnmounted` 永远不跑** ⇒ `clearInterval`
+   * / 关流收尾全部落空。递归顺序**父先子后**，与 effect 的销毁顺序一致。
    */
   const unmounts = cleanups.get(node)
   if (unmounts) {
@@ -114,68 +83,46 @@ function disposeTree(node: Node): void {
     for (const cb of unmounts) cb()
   }
   /**
-   * ⚠⚠ 递归前**先把孩子快照下来**（`Array.from`）。
-   *
-   * `node.childNodes` 是**活的** NodeList，而这一轮里会跑用户的 `onUnmounted` 钩子
-   * （上面那段 ✓）—— 那些钩子**会改 DOM**（除了 `clearInterval`，也常见 `el.remove()`、
-   * 关弹窗、换容器内容）。边遍历边被改的活列表会**跳过**节点 ⇒ 被跳过的那棵子树
-   * 既不销毁 effect、也不跑钩子 ✗（症状是"只有某一页/某一棵子树漏"✗，极难查）。
-   * 快照之后遍历的是固定数组，钩子怎么改都不影响这一轮的覆盖面 ✓。
+   * ⚠⚠ 递归前**先把孩子快照下来**：`node.childNodes` 是**活的** NodeList，而这一轮会跑
+   * `onUnmounted` 钩子、钩子**会改 DOM**；边遍历边被改的活列表会**跳过**节点 ⇒ 被跳过的
+   * 子树既不销毁 effect 也不跑钩子（症状是"只有某一棵子树漏"，极难查）。
    */
   const kids = Array.from(node.childNodes)
   for (const child of kids) disposeTree(child)
 }
 
-/** 批量插入。`anchor` 为 null 即追加到末尾。 */
-/**
- * ⚠⚠ 锚点**可能已经不在 `parent` 里了**，不能直接 `insertBefore`。
+/** 批量插入。`anchor` 为 null 即追加到末尾。
  *
- * 真机上报过（任务中心点"刷新"，2026-09-29）：
- * ```
- * Failed to execute 'insertBefore' on 'Node': The node before which the new node
- * is to be inserted is not a child of this node.
- * ```
- * 抛在这一行的后果不止"顺序不对"：**整次更新被打断**，后面的 `flushSlots/flushMounted`
- * 全都不跑，页面停在半更新状态。
+ * ⚠⚠ 锚点**可能已经不在 `parent` 里了**，不能直接 `insertBefore`：那会抛
+ * `… is not a child of this node`，而后果不止顺序不对 —— **整次更新被打断**，后面的
+ * `flushSlots` / `flushMounted` 全不跑，页面停在半更新状态。机理见 `docs/pitfalls.md`
+ * 「锚点：动态子节点为什么会错位」。
  *
- * 锚点为什么会脱开：本运行时持有**构建时抓下来的节点引用**（模板里的占位注释）。任何
- * 第三方动了那棵 DOM（浏览器扩展：翻译 / 去广告 / 密码管理器；或用户脚本）都可能把它挪走。
- * 干净 profile 的无头 Chrome 里**一次都复现不出来** —— 这就是我前几轮"实测 0 异常"失真的原因。
- *
- * 处置：锚点失效就**退化成追加到末尾**（并警告一次），让更新继续走完。
- * 顺序可能不完美，但比整页炸掉强得多；警告里带着锚点与父节点的信息，下次能直接认出是谁动的。
+ * 锚点脱开多半是第三方动了那棵 DOM（浏览器扩展 / 用户脚本），干净 profile 里复现不出来。
+ * 处置：退化成**追加到末尾**并警告一次（带锚点与父节点信息），让更新走完。
  */
 let warnedDetachedAnchor = false
 
 /**
  * `insert` 的嵌套深度 —— **收尾工作只在最外层做一次**。
  *
- * 为什么：`flushSlots()` 与 `flushMounted()` 都是"扫一遍待办队列"，而它们原先挂在
- * **每一次** `insert` 后面。列表就是重灾区：`createFor` 每挪一行调一次 `insert`，
- * 于是 2,000 行的反转要扫 2,000 轮队列（bench 实测：反转 2000 行 ×10 = 9.9ms、
- * 追加 100 行 ×10 = 5.5ms，是 lite 全场最慢的两项）。
+ * `flushSlots()` / `flushMounted()` 都是"扫一遍待办队列"，原先挂在**每一次** `insert` 后；
+ * 而 `createFor` 每挪一行调一次 `insert`，2,000 行的反转要扫 2,000 轮队列（bench 实测：
+ * 反转 2000 行 ×10 = 9.9ms、追加 100 行 ×10 = 5.5ms，是运行时最慢的两项）。
  *
- * ⚠⚠ 2026-10-03 更正（review §5 C9）：原先这里写「合批之后同一串插入只收尾一次」——
- * **不准确**。`inserting` 只包住**一次** `insert` 调用里的那个 `insertBefore` 循环，
- * 而兄弟节点是**逐个**调 `insert` 的 ⇒ 每个兄弟仍然各收尾一次。
- * 真正省下来的是下面那两个**空判**（`if (pending.length)` / `if (mounts.length)`）：
- * 队列空的时候连函数调用都不发生 —— bench 那组读数对应的正是"扫空队列"的开销。
- * 队列状态仍然一致（这两步只是"把已进文档的东西放行"，晚一点跑不影响结果，
- * 只影响中间态，而中间态没人能观察到 —— 全程同步）。
+ * ⚠⚠ `inserting` 只包住**一次** `insert` 调用里的 `insertBefore` 循环，兄弟节点逐个调 ⇒
+ * 每个兄弟仍各收尾一次。真正省下的是下面两个**空判**（队列空时连函数调用都不发生）；
+ * 队列状态仍一致，晚一点跑只影响中间态，而全程同步、没人能观察到中间态。
  */
 let inserting = 0
 
 export function insert(parent: Node, nodes: Nodes, anchor: Node | null = null): void {
   let at = anchor
   if (at && at.parentNode !== parent) {
-    // ⚠ 告警只在**开发构建**里编译进去（`DEV` 会在 build 时被折成 `false`，
-    // 整块连同那几行长文案与抓栈一起被压缩器删掉，实测 gzip −239 B）。
-    // 退化成追加这件事本身**不**受 DEV 影响 —— 它是行为，不是诊断。
-    //
-    // ⚠ 这里**故意不带**"调用方标签"参数（曾经有个 `where`）：四个调用点各传一个
-    // 字符串（`setNodes:text` / `createFor:batch` …），而它们只在告警里用得到 ——
-    // 生产构建折掉告警后，那几个字符串**照样留在产物里**（压缩器没法证明没人再读）。
-    // 它们想回答的"谁调的"由下面的 `stack` 直接给出，且更精确（文件:行号）。
+    // ⚠ 告警只在**开发构建**里编译进去（`DEV` 在 build 时折成 `false`，整块连同长文案与
+    // 抓栈一起被删，实测 gzip −239 B）；退化成追加是**行为**，不受 DEV 影响。
+    // ⚠ 这里**故意不带**"调用方标签"参数：折掉告警后那些字符串**照样留在产物里**，
+    // 而"谁调的"由下面的 `stack` 给出，且更精确。
     if (DEV && !warnedDetachedAnchor) {
       warnedDetachedAnchor = true
       // 只警告一次：真出问题时控制台不至于被刷爆
@@ -203,11 +150,8 @@ export function insert(parent: Node, nodes: Nodes, anchor: Node | null = null): 
 /**
  * 挂载钩子排队：**节点进了文档**才跑（`onMounted` 语义与 Vue 对齐）。
  *
- * ⚠⚠ 不能只在"应用挂载那一刻"flush 一次。组件不只在首屏被创建 —— **条件分支翻转、
- * 列表插入、切页**都会在之后建出新组件（`SettingsPage` 就是 `authState` 变成 `ready`
- * 之后才在抽屉里建的）。只 flush 一次的话，这些组件的 `onMounted` **永远不跑**：
- * 页面停在"加载中"、按钮一直是 disabled，而且**一声不响**（没有异常）。
- *
+ * ⚠⚠ 不能只在"应用挂载那一刻"flush 一次：**条件分支翻转、列表插入、切页**都会在之后建出
+ * 新组件，其 `onMounted` 若不跑，页面会停在"加载中"且**一声不响**（没有异常）。
  * 所以每次 `insert` 之后都试着 flush；还没进文档的（父节点自己还没被插入）留到下一轮。
  */
 const mounts: { node: Node | undefined; cb: () => void }[] = []
@@ -243,29 +187,18 @@ function flushMounted(): void {
 /**
  * 片段（fragment）里的动态成员：**先出一个占位文本节点，等它进了文档再接管**。
  *
- * 为什么必须延后：`setNodes` 要知道父节点（内容插在占位节点之前），而片段在被消费方
- * 插入之前**没有父节点**。踩到的坑正是这个 —— `app.tsx` 的根返回是片段，
- * `{authState !== 'ready' ? null : <div class="drawer">…</div>}` 只在挂载时求值一次，
- * 之后 `authState` 变了没人重跑，应用**永远停在 loading**。
+ * 为什么延后：`setNodes` 要知道父节点（内容插在占位之前），而片段在被消费方插入之前
+ * **没有父节点**。Solid 把这种成员包成 `memo(...)`，那就得引入观察者与调度器；这里换成
+ * "占位 + 插入后接管"，**同步**建绑定。
  *
- * Solid 的解法是把这种成员包成 `memo(...)`，由它的数组处理逻辑当响应式槽看待。
- * 这里换成"占位 + 插入后接管"：不需要观察者，也不需要调度器，**同步**建绑定。
- */
-/**
- * 碎片槽（`<>…</>`）的记账。
- *
- * ⚠⚠ **占位节点与实际内容必须绑在一起** —— 真机"越刷新内容越多"的根因：
- * `lazySlot` 只把**占位文本节点**交给调用方，碎片内容由槽自己那条 effect 插在占位**后面**。
- * 父槽 re-run 时 `remove(cur)` 只摘掉占位，**碎片内容原地留下**；新一轮再 push 新占位 +
- * 新 effect、又插一份 ⇒ 每刷一次多一整套（实测任务中心 19 → 38 → 57 → 76 张卡片）。
- * 所以按占位记账 {fn, nodes, eff}，`remove()` 遇到占位就把 effect 与它插的**所有**节点一起收掉。
+ * ⚠⚠ **占位与实际内容必须绑在一起**：碎片内容由槽自己那条 effect 插在占位**后面**，父槽
+ * re-run 时 `remove(cur)` 只摘掉占位、**内容原地留下** ⇒ 每刷一次多一整套（"越刷新内容
+ * 越多"）。所以按占位记账 `{fn, nodes, eff}`，`remove()` 遇到占位就把 effect 与它插的
+ * **所有**节点一起收掉。
  */
 type Slot = { fn: () => unknown; nodes: Nodes; eff?: Effect }
-/**
- * 占位节点 → 碎片槽。
- *
- * ⚠ 同上：`WeakMap`，理由见 `owners` 那段（占位也可能落在一条已断开的旧子树里 ✗）。
- */
+/** 占位节点 → 碎片槽。⚠ 同样必须是 `WeakMap`（理由见上面的 `owners`）：占位也可能落在
+ * 一条已断开的旧子树里。 */
 const slots = new WeakMap<Node, Slot>()
 let pending: Node[] = []
 
@@ -288,10 +221,9 @@ export function lazySlot(fn: () => unknown): Node {
 /**
  * 接管"已经进文档"的槽；还没进文档的（父片段也还没被插入）留给下一轮。
  *
- * ⚠ 必须**有界多轮**而不是递归调用自己：槽的内容里可能还有槽（片段套片段），
- * 但嵌深有限；而递归版（在 `insert` 里直接再 flush）在真实应用上出现了
- * **重复插入** —— 同一页 loading 视图被追加 1,580 次、`#app` 涨到 102 KB，
- * Chrome 虚拟时间因此走不完（回归脚本卡了 7 分钟）。
+ * ⚠ 必须**有界多轮**而不是递归调用自己：槽里可能还有槽（片段套片段），但嵌深有限；递归版
+ * （在 `insert` 里直接再 flush）曾出现**重复插入** —— 同一个视图被追加上千次、`#app` 涨到
+ * 102 KB，Chrome 虚拟时间因此走不完（回归脚本卡死）。
  */
 function flushSlots(): void {
   for (let pass = 0; pass < 8 && pending.length; pass++) {
@@ -308,17 +240,11 @@ function flushSlots(): void {
 }
 
 /**
- * 卸载登记的清理函数。
+ * 卸载登记的清理函数。键用**节点数组的第一个节点**：组件卸载时它的节点整体被撤掉，用首
+ * 节点就能找回 `onUnmounted` 钩子。用 `WeakMap` 而不是在节点上挂属性，不给 DOM 留痕迹。
  *
- * 键用**节点数组的第一个节点**：组件卸载时它的节点整体被撤掉，
- * 用首节点就能把 `onUnmounted` 的钩子找回来。用 `Map` 而不是在节点上挂属性 ——
- * 不给 DOM 留任何自定义痕迹。
- *
- * ⚠⚠ 类型是 `WeakMap`，**不是 `Map`**（2026-10-02，用户报「前端 js 内存又从 4M 涨到 8M」）。
- * `Map` 强引用键 ⇒ 只要有一条登记没被 `delete` 掉，那个节点（以及**它整棵子树、
- * 它上面的所有监听器**）就永远活着。实测症状：切页 10 个来回后
- * `jsEventListeners` +162、`nodes` +2739（都发生在"带 `onMounted` 的页面"上）。
- * `WeakMap` 让"登记"本身不构成存活理由：节点该回收就回收，表里那条自然消失。
+ * ⚠⚠ 必须是 `WeakMap`：`Map` 强引用键 ⇒ 只要有一条登记没被 `delete`，那个节点连同**整棵
+ * 子树与它上面的监听器**就永远活着（症状：切页若干来回后监听器与节点计数一路涨）。
  */
 const cleanups = new WeakMap<Node, (() => void)[]>()
 
@@ -338,61 +264,50 @@ export function onRemove(nodes: Nodes, cb: () => void): void {
  * （`onUnmounted` 里多半是 `removeEventListener`，漏跑就是内存泄漏）。
  */
 export function remove(nodes: Nodes): void {
-  // ⚠ 先收碎片槽：否则碎片内容成孤儿留下（真机症状：越刷新内容越多）
+  // ⚠ 先收碎片槽：否则碎片内容成孤儿留下（症状：越刷新内容越多）
   for (const n of nodes) removeSlot(n)
   // 先销毁这棵子树里的 effect **与卸载钩子**，再摘节点：销毁只解绑订阅，不动 DOM。
-  // ⚠ 钩子的收尾现在归 `disposeTree` 管（它按整棵子树走）—— 这里**不要再单独跑一遍**
-  //   `nodes[0]` 那把 key：跑了就是同一条 `onUnmounted` 执行两次（关两次流、
-  //   clearInterval 两次），而且那份重复代码正是当初漏掉子组件的原因 ✗。
+  // ⚠ 钩子收尾归 `disposeTree` 管（它按整棵子树走）—— 这里**不要再单独跑一遍**
+  //   `nodes[0]` 那把 key，否则同一条 `onUnmounted` 会执行两次（关两次流）。
   for (const n of nodes) disposeTree(n)
   for (const n of nodes) n.parentNode?.removeChild(n)
 }
 
 /**
  * 响应式子节点（Vapor 里叫 `setNodes`）：JSX 里 `{expr}` 这种"一整段内容"由它接管。
- *
- * 每次重跑先撤掉上一次铺进去的节点，再铺新的 —— 这段内容替换的语义下
- * 这就是最省字节的写法（不需要在节点间做 diff，因为这不是"列表"）。
+ * 每次重跑先撤掉上一次铺进去的节点再铺新的 —— 内容替换的语义下这是最省字节的写法，
+ * 不需要在节点间做 diff（这不是"列表"）。
  */
 export function setNodes(parent: Node, fn: () => unknown, anchor: Node | null = null, track?: Slot): void {
   let cur: Nodes = []
   const eff = newEffect(() => {
     /**
-     * ⚠⚠ **陈旧 effect 自毁**。真机症状：任务中心"越刷新内容越多，一直重复插入"。
-     * 成因：那块内容被别处整块替换掉了（切页 / 刷新重建），于是 `cur` 已经全部脱离文档、
-     * `remove(cur)` 变成空操作；而这条 effect 还活着，每次数据变化就把**新的一份**追加进去
-     * ⇒ 无限增长。父节点还活着，所以"按父节点记账"的销毁机制管不到它。
-     *
-     * 判据：上次插进去的节点**全都**不在文档里 ⇒ 这块内容已经不属于我们了，退休。
-     * 必须放在做任何事之前（尤其不能先 remove/insert）。
+     * ⚠⚠ **陈旧 effect 自毁**：那块内容被别处整块替换掉后（切页 / 重建），`cur` 已全部
+     * 脱离文档、`remove(cur)` 变成空操作，而这条 effect 还活着 ⇒ 每次数据变化都**追加
+     * 新的一份**、无限增长（症状："越刷新内容越多"）。父节点还活着，所以"按父节点记账"
+     * 的销毁机制管不到它。判据：上次插的节点**全都**不在文档里 ⇒ 退休；必须放在做任何
+     * 事之前（尤其不能先 remove/insert）。
      */
     if (cur.length && cur.every((n) => !n.parentNode)) {
       eff?.dispose()
       return
     }
     /**
-     * ⚠⚠ `fn()` 里建的 effect 必须有归属 —— 这是 2026-10-02 内存泄漏的**第二处**
-     * （第一处是 `component.ts` 的组件体，第三处是 `control.ts` 的列表行）。
-     *
-     * `fn()` 里的 JSX 会建**公开 `effect()`**（动态属性全是它，见 `compiler.ts` 的
-     * `case 'attr'` ✓），而这里是 `newEffect()` 的求值上下文（`scope` 为空 ✗）
-     * ⇒ 那些 effect **谁都不管**：`remove(cur)` 只摘 DOM、不销毁它们 ✗。
-     *
-     * 实测症状（就是它把用户那条"切页后内存累计"顶住的）：**导航栏 9 项 + 底部 dock 5 项**
-     * 是用 `setNodes(parent, () => items.map(…))` 铺的 ✓（不是 `createFor` ✗）⇒
-     * 每切一次页就重建一遍、旧的永不销毁 ⇒ 每次 +28 个 effect / +465 个节点，
-     * 而它们读的正是模块级的"当前页"信号（长命 ⇒ 攥着 effect ⇒ effect 攥着脱离文档的 DOM ✗）。
+     * ⚠⚠ `fn()` 里建的 effect 也必须有归属（机制见 `signal.ts` 的 `scope`）：这里是
+     * `newEffect()` 的求值上下文，`scope` 为空 ⇒ 那些 effect **谁都不管**，`remove(cur)`
+     * 只摘 DOM、不销毁它们。典型触发是用 `setNodes(parent, () => items.map(…))` 铺列表
+     * （而非 `createFor`）⇒ 每切一次页就重建一遍、旧的永不销毁，而它们读的正是长命信号。
      */
     const effs: Effect[] = []
     const v = ownedEffects((e) => effs.push(e), fn)
     /**
-     * 文本快路径（Solid 的 `insertExpression` 同款）：值还是字符串、且位置上就是
-     * 我们上次放的那个文本节点时，直接改 `.data`，不删不建。
-     * 文本更新是最高频的绑定（改一个计数、刷一条日志），这条省下的是真实的 DOM 操作。
+     * 文本快路径（Solid 的 `insertExpression` 同款）：值仍是字符串、且位置上就是上次
+     * 放的那个文本节点时，直接改 `.data`，不删不建。文本更新是最高频的绑定，这里省下
+     * 的是真实的 DOM 操作。
      */
     if (typeof v === 'string' || typeof v === 'number') {
-      // 文本值建不出 effect（`fn()` 返回的就是个字符串 ✓）。真有，也只能销毁 ——
-      // 没有节点可挂，留着就是永久泄漏 ✗。
+      // 文本值建不出 effect（`fn()` 返回的就是字符串）。真有也只能销毁 ——
+      // 没有节点可挂，留着就是永久泄漏。
       for (const e of effs) e.dispose()
       const only = cur[0]
       if (cur.length === 1 && only && only.nodeType === 3) {
@@ -403,10 +318,9 @@ export function setNodes(parent: Node, fn: () => unknown, anchor: Node | null = 
       const t = document.createTextNode(String(v))
       remove(cur)
       cur = [t]
-      // ⚠⚠ 必须走 `insert()`：这里以前是裸的 `parent.insertBefore(t, anchor)`，
-      // **绕过了锚点护栏** —— 锚点脱开时同样抛 `… is not a child of this node`
-      // （文本槽是最容易脱开的一类：占位就是文本节点本身）。统一走 insert，
-      // 顺带把 flushSlots/flushMounted 也带上。
+      // ⚠⚠ 必须走 `insert()`：裸 `parent.insertBefore(t, anchor)` **绕过锚点护栏**，锚点
+      // 脱开时同样抛 `… is not a child of this node`（文本槽最容易脱开）。统一走 insert，
+      // 顺带带上 flushSlots/flushMounted。
       insert(parent, cur, anchor)
       return
     }
@@ -414,9 +328,9 @@ export function setNodes(parent: Node, fn: () => unknown, anchor: Node | null = 
     cur = createNodes(v)
     insert(parent, cur, anchor)
     /**
-     * 归属：把这一段里建的 effect 挂到**新铺进去的节点**下 ✓ ——
-     * 下次重跑时的 `remove(cur)`（→ `disposeTree`）会把它们一起销毁 ✓。
-     * 渲染成空（`null` / `false`）⇒ 没有可挂的节点 ⇒ 直接销毁（留着就是永久泄漏 ✗）。
+     * 归属：把这一段里建的 effect 挂到**新铺进去的节点**下，下次重跑的 `remove(cur)`
+     * （→ `disposeTree`）会把它们一起销毁。渲染成空（`null` / `false`）时没有可挂的
+     * 节点，直接销毁（留着就是永久泄漏）。
      */
     const first = cur[0]
     if (first) for (const e of effs) own(first, e)
@@ -430,7 +344,7 @@ export function setNodes(parent: Node, fn: () => unknown, anchor: Node | null = 
 
 /**
  * `setAttr` 里"`false` ⇒ 移除属性"的属性名白名单 —— 与 Vue 的 `isSpecialBooleanAttr` 同一份
- * （`checked`/`disabled`/`required` 这些**短路在 `setProp` 上**，根本不走这里）。
+ * （`checked`/`disabled`/`required` 这些**短路在 `setProp` 上**，不走这里）。
  */
 const BOOL_ATTR = new Set(['allowfullscreen', 'formnovalidate', 'ismap', 'itemscope', 'nomodule', 'novalidate', 'readonly'])
 
@@ -439,9 +353,8 @@ export function setClass(node: Node, v: unknown): void {
   const el = node as Element
   const s = v == null || v === false ? '' : String(v).trim()
   /**
-   * ⚠⚠ 不能无条件写 `el.className`：**SVG 元素的 `className` 是只读的**
-   * `SVGAnimatedString`，赋值直接抛 `TypeError`（本项目图标全是 `<svg>`，
-   * 而 `class` 绑定是每个图标头上的第一个 effect ⇒ 一抛就是整个组件树建不出来）。
+   * ⚠⚠ 不能无条件写 `el.className`：**SVG 元素的 `className` 是只读的** `SVGAnimatedString`，
+   * 赋值直接抛 `TypeError`（`class` 绑定常挂在图标元素上，一抛就是整个组件树建不出来）。
    * HTML 元素上 `className` 比 `setAttribute` 省一次解析，所以两路分开走。
    */
   if (typeof el.className === 'string') {
@@ -454,10 +367,9 @@ export function setClass(node: Node, v: unknown): void {
 /**
  * 普通属性。`null` 移除；`false` 只有布尔属性才移除，其余一律 `String(v)`。
  *
- * ⚠ 原来把 `true` 写成 `""`（"布尔属性只需要存在"的直觉）。**不对**：这条路径收到 `true`
- * 的场景根本不是布尔属性 —— 布尔属性（`disabled`/`checked`/…）在编译器里走 `setProp`。
- * 走这里的是 `{...BASE}` 展开和 `aria-*`，而 `aria-hidden={true}` 必须序列化成
- * `aria-hidden="true"`（`""` 既不是合法 ARIA 值，也和 Vue 的产物对不上）。
+ * ⚠ 不能把 `true` 写成 `""`：这条路径收到 `true` 的都不是布尔属性（`disabled`/`checked`
+ * 那些在编译器里走 `setProp`），而是 `{...BASE}` 展开与 `aria-*` —— `aria-hidden={true}`
+ * 必须序列化成 `"true"`，`""` 既不是合法 ARIA 值也和 Vue 的产物对不上。
  */
 export function setAttr(node: Node, name: string, v: unknown): void {
   const el = node as Element
@@ -476,9 +388,8 @@ export function setProp(node: Node, name: string, v: unknown): void {
 /**
  * `value`（输入框 / 下拉框）。**property 与 attribute 都写** —— 与 Vapor 的 `setValue` 一致。
  *
- * ⚠ 只写 property 是不够的：`--dump-dom`、`outerHTML`、`getAttribute('value')`、以及
- * 一切"读标签"的代码都看不到值，而 `<input value={x} readonly>` 这种**只读展示框**
- * 恰恰是只靠它显示的（首屏回归里就是这条把它比出来的）。
+ * ⚠ 只写 property 不够：`--dump-dom`、`outerHTML`、`getAttribute('value')` 与一切"读标签"
+ * 的代码都看不到值，而 `<input value={x} readonly>` 这种**只读展示框**恰恰只靠它显示。
  */
 export function setValue(node: Node, v: unknown): void {
   const el = node as HTMLInputElement
@@ -496,8 +407,8 @@ export function on(node: Node, name: string, fn: (e: Event) => void): void {
 }
 
 /**
- * `{...obj}` 展开。项目里 16 处全是 `<svg {...BASE}>`（模块级常量对象），
- * 所以编译期只在**表达式含响应式读取**时才包 effect，否则就是一次性铺属性。
+ * `{...obj}` 展开。编译期只在**表达式含响应式读取**时才包 effect，
+ * 否则就是一次性铺属性（常见情形是给 `<svg>` 铺模块级常量对象）。
  */
 export function spread(node: Node, obj: Record<string, unknown>): void {
   const el = node as Element

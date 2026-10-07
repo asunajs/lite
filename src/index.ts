@@ -1,24 +1,14 @@
 /**
- * lite —— 给本项目用的轻量前端框架（无虚拟 DOM + 编译期优化，与 Vue Vapor 同路）。
+ * lite —— 轻量 TSX 前端框架：**无虚拟 DOM + 编译期绑定**，与 Vue Vapor 同路。
  *
- * 语法子集**由普查决定**，不含"以后可能用得上"的东西：
+ * 语法子集**刻意窄**，不含"以后可能用得上"的东西：**没有** computed / reactive /
+ * provide-inject / nextTick / Teleport / Transition / Suspense / 异步组件 / 指令。
+ * 唯一保留的 Vue 旧名是 `ref` / `.value`（读起来就是"一个可写的格子"，见 `signal.ts`）。
  *
- * | API | 项目里的用量 | 为什么留 |
- * |---|---|---|
- * | `ref` | 66 处 | 唯一的响应式原语 |
- * | `onMounted` / `onUnmounted` | 11 / 5 处 | 拉数据、解绑全局事件 |
- * | `watch` | 1 处 | `app.tsx` 里盯登录态 |
- * | 组件（普通箭头函数） | 22 个 | 页面与 UI 单元 |
- * | 插槽 `slots.default?.()` | 1 处 | `dialog.tsx` |
- *
- * **没有** computed / reactive / provide-inject / nextTick / Teleport /
- * Transition / Suspense / 异步组件 / 指令（`v-if` 等一个都没用）——
- * 项目里没出现过的语法，这里就不实现。2026-09-30 起连 `computed`、`createStore`
- * 这两个"0 处使用"的也删了（当初只为兼容 Vue 而留），见 `signal.ts` 文件头。
- *
- * 下面分两组导出，**别把它们当成同一回事**：
- * 第一组是**编译器**往产物里 import 的（名单 = `compiler.ts` 里所有 `this.h('…')`），
- * 名字一改编译产物就断；第二组是给**人**写的代码用的。
+ * 下面三组导出**别当成同一回事**：
+ * - 第一组由**编译器**写进产物（名单 = `compiler.ts` 里所有 `this.h('…')`），改名即断产物；
+ * - 第二组是**业务代码**手写的（组件、生命周期、挂载、插槽）；
+ * - 第三组是运行时内部件（`createFor` / `setNodes` 的实现细节），demo 与排障会直接调。
  */
 
 // ── 编译器 import 的那批 ────────────────────────────────────────────────────
@@ -32,9 +22,5 @@ export { type Component, mount, onMounted, onUnmounted, type Slots, useSlots } f
 
 // ── 运行时自己的内部件（demo / bench / 排障会直接调，业务代码不该用）────────
 // `insert` / `createNodes` 是 `createFor` 与 `setNodes` 的实现细节。
-//
-// ⚠ 这里曾经还导出 `setText`，注释写着"是 `setNodes` 的纯文本快路，留给 demo 压"。
-// 2026-09-30 复核发现：**编译器不发它、运行时内部不调它、demo/bench 也没在用**
-// （demo 里那句只是注释提到）—— 是一段"注释说得像在用"的死码，已删。
-// 纯文本快路确实存在，但它在 `setNodes` 内部，不是这个导出。
+// 纯文本快路确实存在，但在 `setNodes` 内部，不是这里的导出。
 export { createNodes, insert, onRemove } from './dom'

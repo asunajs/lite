@@ -5,7 +5,7 @@
 # * `browser-gates`：真 DOM 验收（`demo/`）与编译产物行为/耗时护栏（`bench/`）——
 #   这两条只有真浏览器能回答，所以单独一个 job、自己装无头 Chrome。
 #
-# ⚠ 无头 Chrome 的路径口径：本仓的 `demo/run.mjs` / `bench/run.mjs` 从
+# ⚠ 无头 Chrome 的路径口径：`demo/run.mjs` / `bench/run.mjs` 从
 # `~/.cache/puppeteer/chrome-headless-shell/*/chrome-headless-shell-*/chrome-headless-shell`
 # 里找它 —— 那正是 `@puppeteer/browsers` 的默认落点，所以下面那条安装命令够了，
 # **不需要**把 puppeteer 加进 devDependencies。

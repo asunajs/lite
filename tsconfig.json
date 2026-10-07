@@ -9,7 +9,7 @@
     // `node` 是给 `regress/check.vite.config.ts`（它 import `node:path`）与各脚本用的。
     "types": ["vite/client", "node"],
 
-    // JSX 的**类型**来自本仓的 `jsx.d.ts`（一个全局 `JSX` 命名空间）。
+    // JSX 的**类型**来自本包的 `jsx.d.ts`（一个全局 `JSX` 命名空间）。
     // ⚠ 一旦写 `jsxImportSource`，tsc 就改去读那个包的模块声明，这份全局声明**整个失效**
     // —— 症状是每个标签都报 TS7026。运行时由 `vite.ts` 编译（`preserve` 正好表示"tsc 别动 JSX"）。
     "jsx": "preserve",

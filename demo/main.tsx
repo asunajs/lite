@@ -1,12 +1,11 @@
 /**
- * lite 的**验收样例**：这份文件是**真实 TSX**，由 `vite.ts` 编译，
- * 跑的是**行为断言** —— 也就是说，断言验证的是**编译器的产物**，
- * 不是手写的目标形态。
+ * lite 的**验收样例**：一份真实 TSX，由 `vite.ts` 编译后跑**行为断言** ——
+ * 断言验证的是**编译器的产物**，不是手写的目标形态。
  *
- * ⚠ 断言条数**不要**写死在注释里（以前写 22/53/55，源码涨到几十条时注释一直在说谎）；
+ * 用例覆盖 `ref` / `.value` / `onMounted` / `watch` / `useSlots` 这些常规写法。
+ *
+ * ⚠ 断言条数**不要**写死在注释里：数字会随源码漂移，注释随即说谎。
  * 要看实时数字就跑 `npm run test:demo`，最后一行打印"✓ 全过（N 条）"。
- *
- * 写法刻意与项目现状一致（`ref` / `.value` / `onMounted` / `watch` / `useSlots` / TSX）。
  */
 
 import { batch, mount, onMounted, onUnmounted, ref, useSlots, watch } from '../src/index'
@@ -14,7 +13,7 @@ import { batch, mount, onMounted, onUnmounted, ref, useSlots, watch } from '../s
 /** 自测用的计数器。 */
 const demo = { mounted: 0, unmounted: 0, mountedInDoc: false, late: 0, watches: [] as string[] }
 
-// 原样：一个普通函数组件，两个动态绑定 + 两个生命周期钩子
+// 一个普通函数组件：两个动态绑定 + 两个生命周期钩子
 const Row = (props: { label: string; n: number }) => {
   onMounted(() => demo.mounted++)
   onUnmounted(() => demo.unmounted++)
@@ -93,9 +92,8 @@ const App = () => {
 /**
  * ⚠ **回归用例：组件返回片段**（fragment）。
  *
- * 真实应用的根组件就是这个形状（`app.tsx` 的 `return (<>…</>)`），而它一度只在挂载时
- * 求值一次 —— `authState` 变了没人重跑，应用永远卡在 loading。demo 原来的 20 条断言里
- * **没有一个组件返回片段**，所以漏了。这里把它钉住：既断言内容，也断言**没有重复节点**。
+ * 返回 `<>…</>` 的组件**必须在片段内容变化时重跑**：若只在挂载时求值一次，它读的信号变了
+ * 也没人重跑 ⇒ 界面永远停在初始态。这里把它钉住：既断言内容，也断言**没有重复节点**。
  */
 const showFrag = ref(true)
 const fragItems = ref([
@@ -136,7 +134,7 @@ const Split = () => (
   </>
 )
 
-// ── 断言（与手写版逐条一致）───────────────────────────────────────────────────
+// ── 断言 ─────────────────────────────────────────────────────────────────────
 const out: string[] = []
 const ok = (name: string, cond: boolean, extra = '') => out.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ← ' + extra : ''}`)
 
@@ -182,9 +180,8 @@ ok('条件切回来', !!document.getElementById('branch'))
 ok('列表标题随数据更新', ($('section.panel > h3') as HTMLElement)?.textContent === `共 ${rows().length} 条`, ($('section.panel > h3') as HTMLElement)?.textContent)
 
 /**
- * 与应用**同形状**的用例：第一个片段成员是一个**本地函数返回的 JSX**（`gate()`，
- * 对非目标状态返回 null），第二个成员是同一信号驱动的条件 —— app.tsx 的
- * `{authGate()}` + `{authState.value !== 'ready' ? null : <div class="drawer">}` 就是这样。
+ * 一个常见的门形状：片段第一个成员是**本地函数返回的 JSX**（`gate()` 对非目标状态返回 null），
+ * 第二个成员是同一信号驱动的条件。
  */
 const stage = ref<'checking' | 'ready'>('checking')
 const gate = () => (stage.value === 'checking' ? <div id="stage-loading">L</div> : null)
@@ -234,13 +231,12 @@ ok('片段：列表复用了已有节点', !!fragFirst?.isConnected && fragFirst
 ok('片段：追加后也没重复节点', fragCount() === baseCount, `childNodes ${fragCount()} vs ${baseCount}`)
 
 /**
- * 三个**在真实应用上踩到的**形状（都让设置页整体白屏，而且都不报错 —— 错误被应用侧的
- * `try/catch` 吞了，`window.onerror` 一声不响）：
+ * 三种**会静默出错**的形状（错误若被组件侧 `try/catch` 吞掉，`window.onerror` 一声不响）：
  *
  * 1. `<label … />` 这种**非空元素的自闭合写法**：生成 HTML 时若不写闭合标签，解析器会把
  *    后面的兄弟节点**吞成它的子节点**，编译期算好的 `childNodes[i]` 全部错位一格；
  * 2. SVG 上的 `class` 绑定：`SVGElement.className` 是**只读的** `SVGAnimatedString`，
- *    无条件写它直接抛 `TypeError`（本项目图标全是 `<svg>`）；
+ *    无条件写它直接抛 `TypeError`；
  * 3. `将结束{' '}<b>{x}</b>` 这种**文本里夹元素**的写法：相邻文本在解析后合成一个节点，
  *    按"每段文本各占一位"数下标，就会拿到一个**文本节点当父节点**去 `insertBefore`。
  */
@@ -261,7 +257,7 @@ const Misc = () => (
     <button id="misc-current" type="button" aria-current={miscText.value === '当前' ? 'page' : undefined}>
       C
     </button>
-    {/* 空白语义：与 `vue-jsx-vapor` 的产物逐字符对齐（见 compiler.ts 的 jsxText 规则表） */}
+    {/* 空白语义：按 compiler.ts 的 jsxText 规则表 */}
     <span id="ws-a">耗时 {miscText.value}秒</span>
     <span id="ws-b">
       第一行
@@ -272,8 +268,7 @@ const Misc = () => (
 )
 
 /**
- * ⚠ 真机上报过的一个错：**被移除的子树里 effect 不销毁**，于是它带着已经不存在的
- * 锚点继续重跑，抛
+ * ⚠ **被移除的子树里 effect 不销毁**时，它带着已经不存在的锚点继续重跑，抛
  * `Failed to execute 'insertBefore' on 'Node': … is not a child of this node`。
  * 这里刻意造出那个形状：先卸载子树，再改它读过的**全局**信号。
  */
@@ -292,11 +287,9 @@ ok(
 )
 
 /**
- * ⚠⚠ 真机上报过的**同形**复现（任务中心点刷新）：我们持有的锚点**被第三方摘掉**、父节点还在，
- * 此时 `insertBefore` 抛 `… is not a child of this node` 并**打断整次更新**。
- * 这条路径以前没有护栏（前几轮"实测 0 异常"全在干净 profile 里跑的，根本没有第三方）。
- * 注意必须让动态子节点是**组件/元素**（纯文本走 `setNodes` 里的文本快路，碰不到 insert）。
- * 摘掉运行时那两行防御后，这条必须**变红**，否则它就是摆设。
+ * ⚠⚠ 锚点**被第三方摘掉**、父节点还在时，`insertBefore` 会抛 `… is not a child of this node`
+ * 并**打断整次更新**，所以运行时必须有护栏。把运行时那两行防御摘掉，这条必须变红。
+ * 注意动态子节点必须是**组件/元素**（纯文本走 `setNodes` 里的文本快路，碰不到 insert）。
  */
 const Flag = ref(true)
 const FlagChild = () => <b id="c-child">C</b>
@@ -326,16 +319,15 @@ ok(
 /**
  * 用例 A：**碎片槽（`<>…</>`）的内容必须与占位绑定**。
  *
- * 真机症状（任务中心点刷新）：每刷一次多一整套内容。根因：`lazySlot` 只把占位文本节点交给
- * 调用方，碎片内容由槽自己那条 effect 插在占位**后面**；父槽重跑时 `remove(cur)` 只摘掉占位，
+ * 症状是每重渲染一次就多一整套内容。根因：`lazySlot` 只把占位文本节点交给调用方，
+ * 碎片内容由槽自己那条 effect 插在占位**后面**；父槽重跑时 `remove(cur)` 只摘掉占位，
  * 碎片内容原地留下 ⇒ 新的一轮再插一份。
- * ⚠ 触发条件（从 `app.tsx` 的编译产物看出来的）：**返回多成员片段的组件**才会生成 lazySlot
- * （`[lazySlot(() => A), lazySlot(() => B)]`）。单成员片段、片段套在 div 里都不会触发 ——
- * 我前两版用例就是这么写成假绿的。
+ * ⚠ 触发条件是**返回多成员片段的组件**才会生成 lazySlot（`[lazySlot(() => A), lazySlot(() => B)]`）；
+ * 单成员片段、片段套在 div 里都不会触发。
  */
 const slN = ref(0)
 const SlItem = () => <i class="sl-item">y</i>
-// ⚠ 片段的**动态成员**才生成 lazySlot（静态成员被折进模板）—— 照 app.tsx 的形状写两个
+// ⚠ 片段的**动态成员**才生成 lazySlot（静态成员被折进模板）—— 所以这里写两个动态成员
 const SlBranch = () => (
   <>
     {slN.value >= 0 ? <SlItem /> : null}
@@ -387,14 +379,9 @@ ok(
 /**
  * 用例：**JSX 子节点位置上放一个会返回 `null` 的 helper 调用**。
  *
- * 这是直播页"一类口令一栏"的形状：判空做成 helper 的返回值，再内联进子节点位置
- * （`{group(...)}`，而 `group` 在空时返回 `null`）。
- * lite 这边 `setNodes` 走 `createNodes` ⇒ `null` / `false` 归一成"零个节点"，
- * 静态兄弟照常渲染，条件之后变真还能补在正确的锚点前。
- *
- * ⚠ 历史：这条位置在 **Vue Vapor** 下会读 `null.parentNode` 直接抛 `TypeError`，
- * 老注释因此警告过"整块渲染不出来"。兼容层拆掉后不适用 —— 这条断言钉住的是**新事实**，
- * 别照旧警告改代码。
+ * 判空做成 helper 的返回值，再内联进子节点位置（`{group(...)}`，`group` 空时返回 `null`）。
+ * `setNodes` 走 `createNodes` ⇒ `null` / `false` 归一成"零个节点"，静态兄弟照常渲染，
+ * 条件之后变真还能补在正确的锚点前。
  */
 const ncOn = ref(false)
 const ncGroup = () => (ncOn.value ? <b class="nc-item">有</b> : null)
@@ -419,7 +406,7 @@ ok('自闭合非空元素：后面的兄弟还是兄弟', miscBox().children.len
 ok('自闭合非空元素：没把兄弟吞成子节点', document.querySelector('label.misc-label')?.children.length === 0)
 ok('自闭合非空元素：兄弟顺序对', (miscBox().children[1] as HTMLElement)?.id === 'misc-after-label')
 ok('SVG 上的 class 绑定生效（不抛只读错误）', document.getElementById('misc-svg')?.getAttribute('class') === '当前')
-// 布尔 true 在 ARIA 上必须序列化成 "true"（`""` 不是合法 ARIA 值；本项目图标用 `{...BASE}` 展开它）
+// 布尔 true 在 ARIA 上必须序列化成 "true"（`""` 不是合法 ARIA 值）
 ok('aria-hidden={true} 序列化成 "true"', document.getElementById('misc-svg')?.getAttribute('aria-hidden') === 'true', JSON.stringify(document.getElementById('misc-svg')?.getAttribute('aria-hidden')))
 ok('文本里夹元素：结构正确', document.getElementById('misc-mixed')?.textContent === '将结束 当前 在本浏览器', JSON.stringify(document.getElementById('misc-mixed')?.textContent))
 ok('文本里夹元素：<b> 是 span 的直接子节点', (document.getElementById('misc-bold')?.parentNode as HTMLElement)?.id === 'misc-mixed')
@@ -444,8 +431,7 @@ ok(
  * ⚠ **回归用例：位置敏感的列表行**（编译器算出来传进来的 `positional`）。
  *
  * 渲染体读了索引（`第 {i + 1} 步`）⇒ **位置是内容的一部分**：重排时那一行必须重建，
- * 否则步号跟着节点走，界面就成了"第 3 步排在第 1 步前面" —— 流水线编辑器的
- * 「上移/下移」正是这个形状。
+ * 否则步号跟着节点走，界面就成了"第 3 步排在第 1 步前面"。
  *
  * 反面是上面那个 `#list`：不读索引的行重排时**搬动**（保住输入框光标、焦点、滚动位置
  * 与 CSS 过渡）。两种行为由 `createFor` 的 `positional` 形参决定。

@@ -1,38 +1,22 @@
 /**
- * AST 适配层：把 **oxc-parser** 的 ESTree 形状，适配成 lite 编译器要用的那一小撮接口。
+ * AST 适配层：把 **oxc-parser** 的 ESTree 形状，适配成编译器要用的那一小撮接口
+ * —— 本文件是唯一 import `oxc-parser` 的地方。
  *
- * # 为什么单独一层
+ * 编译器的代码生成**完全不用解析器的 printer**（产物是自写的字符串拼接）⇒ 换解析器
+ * **不改产物形状**，只改"怎么读源码"。编译器里只有一小撮代码碰 AST，且只做三类事：
+ * "这是哪种节点" / "取字段" / "按位置切源码" —— 收进本文件后，换解析器只动这里加一次机械改名。
  *
- * `compiler.ts` 799 行里**只有 95 行碰 AST**，而且只做三类事：
- * "这是哪种节点" / "取字段" / "按位置切源码"。把这三类收进本文件后，
- * 换解析器就只动这里 + 一次机械改名（`ts.` → `ast.`）。
+ * 做法是**一次 normalize 遍历**，把 TS 口径的别名与 `kind` 挂到节点上，而不是在编译器里
+ * 逐处改写字段：oxc 的字段名与 TS 不同（`Literal.value` vs `.text` 等），且有一处**结构**
+ * 差异 —— TS 把自闭合元素当独立节点，oxc 里它也是 `JSXElement`，靠 `openingElement.selfClosing` 区分。
  *
- * 关键事实（决定了这件事有多小）：**编译器的代码生成完全没用 TS 的 printer**
- * ——`createPrinter` / `printNode` / `getText` 在 `compiler.ts` 里命中数为 0，
- * 产物是自写的字符串拼接。所以换解析器**不改产物形状**，只改"怎么读源码"。
+ * ⚠ 代价：别名是**拷贝**（同一个子节点被两个键指向）⇒ `forEachChild` 必须跳过别名键，
+ * 否则同一节点被访问两次 —— `exprWithJsx` 靠它收集替换区间，重复访问会产出重复编辑。
+ * 于是每个挂过别名的节点都记一份 `__alias` 名单。
  *
- * 2026-10-01：用户要求去掉 `typescript` 包（那一句"ts 就是为了编译"是对的：
- * 全仓只有 `compiler.ts` 一处 import 它）。本文件是**唯一** import `oxc-parser` 的地方。
- *
- * # 为什么是"归一化"而不是逐处改写字段
- *
- * oxc 的字段名与 TS 不同（`Literal.value` vs `.text`、`ConditionalExpression.consequent`
- * vs `.whenTrue`、`JSXOpeningElement.name` vs `.tagName`…），另有一处**结构**差异：
- * TS 把自闭合元素当作独立的 `JsxSelfClosingElement`，而 oxc 里它也是 `JSXElement`，
- * 靠 `openingElement.selfClosing` 区分。
- *
- * 与其在编译器里逐处改写（95 行会变成几百行 diff），这里做**一次 normalize 遍历**：
- * 把别名与 `kind` 直接挂到节点上，于是 `ts.` 改成 `ast.` 就能跑。
- *
- * ⚠ 代价：别名是**拷贝**（同一个子节点会被两个键指向），所以 `forEachChild` 必须跳过
- * 别名键，否则同一节点被访问两次 —— `compile()` 里的 `exprWithJsx` 正是靠
- * `forEachChild` 收集替换区间，重复访问会产出**重复编辑**（产物直接坏掉）。
- * 于是每个挂过别名的节点都记一份 `__alias` 名单，遍历时跳过。
- *
- * ⚠ 本层的类型是**宽松**的（`[key: string]: any`）：它要描述一棵来源不断变化的树，
- * 逐字段强类型只会让 95 行的移植变成 500 行的类型体操。行为不靠类型保证，靠两样东西：
- * `regress/compiler.mjs` 的 12 条负例，以及"18 个 tsx 的产物与 TS 版逐字节一致"
- * （黄金样本在移植时对过，见 `docs/design.md`）。
+ * ⚠ 本层类型是**宽松**的（`[key: string]: any`）：逐字段强类型只会把移植变成类型体操。
+ * 行为不靠类型保证，靠 `regress/compiler.mjs` 的负例，以及"18 个真实页面 tsx 的产物
+ * 逐字节一致"这条黄金样本口径。
  */
 import { parseSync } from 'oxc-parser'
 
@@ -43,11 +27,10 @@ export interface Node {
   start: number
   end: number
   /**
-   * 少数**结构性**字段给出具体类型（比索引签名更具体，于是赢）：
-   * 有它们，`node.children.map((c) => …)` 里的回调参数才是 `Node` 而不是隐式 any。
+   * 少数**结构性**字段给出具体类型（比索引签名更具体，于是赢）：有它们，
+   * `node.children.map((c) => …)` 里的回调参数才是 `Node` 而不是隐式 any。
    * ⚠ 这三个声明成**必有**是刻意的：并不是每个节点都有 `children`（Identifier 就没有），
-   * 但编译器只在"确定有"的地方读它们 —— 声明成可选只会换来十几处 `?? []` 与 `!`，
-   * 把这次移植的 diff 搅浑。行为不靠类型保证（见文件头最后一段）。
+   * 但编译器只在"确定有"的地方读它们 —— 声明成可选只会换来十几处 `?? []` 与 `!`。
    * 其余字段一律走索引签名。
    */
   children: Node[]
@@ -129,10 +112,10 @@ function normalize(program: Node): void {
     for (const key of Object.keys(n)) {
       if (key === ALIAS) continue
       const v = n[key]
-      // ⚠ 花括号不能省：`if (…) for (…) if (…) push(c) else if (…) push(v)`
-      // 里的 `else` 会绑到**内层** if 上 —— 表现是"数组子节点进得来、对象子节点永远进不来"，
-      // 于是绝大多数节点没被归一化（`kind` 是 undefined、JSX 找不到、产物静默退回原文件）。
-      // 2026-10-01 实测踩过：192 个节点只进来了 7 个。
+      // ⚠ 花括号不能省：`if (…) for (…) if (…) push(c) else if (…) push(v)` 里的 `else`
+      // 会绑到**内层** if 上 —— 表现是"数组子节点进得来、对象子节点永远进不来"，于是绝大
+      // 多数节点没被归一化（`kind` 是 undefined、JSX 找不到、产物静默退回原文件）。
+      // 实测：写成那样时 192 个节点只进来了 7 个。
       if (Array.isArray(v)) {
         for (const c of v) {
           if (c && typeof c === 'object' && typeof (c as Node).type === 'string') stack.push(c as Node)
@@ -176,10 +159,10 @@ function apply(n: Node): void {
         alias(n, 'initializer', n.value)
         break
       case 'JSXOpeningElement': {
-        // TS 的 `openingElement.attributes` 是一个 **JsxAttributes 节点**（属性数组在它的
-        // `.properties` 上），而 oxc 直接给数组 ⇒ 编译器那三处 `opening.attributes.properties`
-        // 会读到 undefined。这里把数组**换**成一个同形状的包装节点（不是别名：键名没变，
-        // 遍历仍能走进去，属性节点只被访问一次）。
+        // TS 的 `openingElement.attributes` 是一个 **JsxAttributes 节点**（属性数组在 `.properties`
+        // 上），而 oxc 直接给数组 ⇒ 编译器那三处 `opening.attributes.properties` 会读到 undefined。
+        // 这里把数组**换**成一个同形状的包装节点（不是别名：键名没变，遍历仍能走进去，属性节点
+        // 只被访问一次）。
         const attrs = Array.isArray(n.attributes) ? n.attributes : []
         n.attributes = {
           type: 'JsxAttributes',
@@ -247,10 +230,9 @@ function apply(n: Node): void {
       case 'JSXExpressionContainer':
         /**
          * ⚠ TS 对**空表达式容器**（`{/* 注释 *\/}`、`{}`、`{ }`）一律给 `expression === undefined`，
-         * 而 oxc 给一个 `JSXEmptyExpression` 节点 —— 实测三种写法都对过拍。
-         * 这个差别会**改产物**：编译器靠 `if (!child.expression) continue` 跳过它们，
-         * oxc 的节点是真值 ⇒ 会当成动态子节点多吐一个 `<!---->` 锚点（黄金样本就是这么抓出来的）。
-         * 所以这里镜像 TS 的口径。
+         * 而 oxc 给一个 `JSXEmptyExpression` 节点 —— 三种写法都对过拍。这个差别会**改产物**：
+         * 编译器靠 `if (!child.expression) continue` 跳过它们，oxc 的节点是真值 ⇒ 会当成动态子
+         * 节点多吐一个 `<!---->` 锚点（黄金样本抓出来的）。所以这里镜像 TS 的口径。
          */
         if (n.expression?.type === 'JSXEmptyExpression') n.expression = undefined
         break

@@ -3,16 +3,12 @@
  * **Node 能直接 import 的 ESM**，好在脚本里跑编译期负例。
  *
  * 为什么这么绕：`compiler.ts` 是 TS，而 Node 的类型剥离开关
- * （`--experimental-transform-types`）在 Node 22 上还没有 —— 闸门不能靠开关活着。
+ * （`--experimental-transform-types`）在 Node 22 上还没有 —— 门禁不能靠开关活着。
  * 走 vite 就与主产物同一套工具链，多出来的成本是一次约 0.3 s 的小构建。
  *
- * ⚠ `oxc-parser` 必须是 external：它是**原生**包（napi 二进制），既打不进 bundle，
- * 打进去也没有意义 —— 与闸门要证明的东西毫无关系。
- * （2026-10-01 之前这里 external 的是 `typescript`，编译器换解析器时一起换了。）
- *
- * ⚠ 路径一律绝对：本文件与临时目录都在 `regress/` 下（`.check-tmp`），而
- * Vite 把相对 `outDir` 当成相对 **root**（= 仓库根），不写绝对就会落错地方 ——
- * 写错一次就是 `UNRESOLVED_ENTRY`（踩过）。
+ * ⚠ `oxc-parser` 必须是 external：它是**原生**包（napi 二进制），打不进 bundle 也没有意义。
+ * ⚠ 路径一律绝对：Vite 把相对 `outDir` 当成相对 **root**（= 仓库根），不写绝对
+ * 就会落错地方（`UNRESOLVED_ENTRY`）。
  */
 import path from 'node:path'
 import { defineConfig } from 'vite'

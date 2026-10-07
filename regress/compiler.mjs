@@ -1,13 +1,12 @@
 /**
- * 编译期闸门：这些写法**必须**在编译时炸掉（或必须编出指定形态）。
+ * 编译期门禁：这些写法**必须**在编译时炸掉（或必须编出指定形态）。
  *
- * 为什么单独一条门：编译器的错误都是"抛出去"的，也就是说**没人写负例时，
- * 删掉那一句 `throw` 照样全绿** —— 而 `key` 那条恰恰是"看起来无害、实际静默错位"
- * 的典型：非 map 位置的 `key` 被丢掉之后，界面当时是对的，等列表一重排就乱。
- * 负例是唯一能把它钉住的东西。
+ * 为什么单独一条门：编译器的错误都是"抛出去"的，**没人写负例时，删掉那一句 `throw`
+ * 照样全绿** —— 而 `key` 那条恰恰是"看起来无害、实际静默错位"的典型：非 map 位置的
+ * `key` 被丢掉之后，界面当时是对的，等列表一重排就乱。负例是唯一能把它钉住的东西。
  *
- * 为什么在 Node 里跑而不是在浏览器里：`compile()` 是纯函数（源码进、字符串出），
- * 判据全在返回值与抛错上，不需要真 DOM（那是 `demo/run.mjs` 的活）。
+ * 为什么在 Node 里跑而不是浏览器：`compile()` 是纯函数（源码进、字符串出），判据全在
+ * 返回值与抛错上，不需要真 DOM（那是 `demo/run.mjs` 的活）。
  *
  * 用法：`npm run test:compiler`（退出码非 0 = 有负例没按预期抛错）
  */
@@ -69,7 +68,7 @@ const CASES = [
     noOk: ['createFor('],
   },
   {
-    name: '指令式属性 ⇒ 抛错（本框架没有 v-if 这一族）',
+    name: '指令式属性 ⇒ 抛错（lite 没有 v-if 这一族）',
     src: `const A = () => <div v-if="ok">x</div>`,
     throws: '不支持指令式属性',
   },
@@ -92,10 +91,10 @@ const CASES = [
     ok: ['xlink:href'],
   },
   {
-    // ⚠ 2026-10-02 实测踩到的：`ui/account-picker.tsx` 改成"整份就是一个组件"之后
-    // （没有任何静态元素 ⇒ `templates.length === 0`），`finish()` 那句早退把
-    // helper 的 import 一起吞了 ⇒ 产物跑起来报 `_$createComponent is not defined`，
-    // 而**编译期一声不响**。这条钉住"没有静态模板也要注入 import"。
+    // ⚠ 一份"整份就是一个组件"的源码（没有任何静态元素 ⇒ `templates.length === 0`）时，
+    // `finish()` 那句早退会把 helper 的 import 一起吞掉 ⇒ 产物跑起来报
+    // `_$createComponent is not defined`，而**编译期一声不响**。
+    // 这条钉住"没有静态模板也要注入 import"。
     name: '只有组件、没有静态模板 ⇒ 仍要注入 helper import',
     src: `const A = (p) => <Row a={p.x} />`,
     ok: ['createComponent as _$createComponent'],
@@ -105,7 +104,7 @@ const CASES = [
 // 把 `compiler.ts` 打成一个 Node 能直接 import 的 ESM。
 // ⚠ 不用 Node 自带的类型剥离：`--experimental-transform-types` 在 Node 22 上还没有，
 // 而 `oxc-parser`（原生 napi 包）**必须留成 external** —— 二进制打不进 bundle，
-// 与本闸门要证明的东西毫无关系。
+// 与本门禁要证明的东西毫无关系。
 fs.rmSync(tmp, { recursive: true, force: true })
 fs.mkdirSync(tmp, { recursive: true })
 fs.writeFileSync(

@@ -1,19 +1,17 @@
-# 把 lite 迁进你的新项目
-
-> 📦 **来源**：本文原在 mcloud 仓库的 `docs/web/lite-guide.md`，2026-10-07 随 lite 剥离
-> 迁到本仓（`asunajs/lite`）。文中凡提到 mcloud 的读数、路径与门禁，都是**当时**的记录；
-> 路径按新仓重写过，读数按"不追改历史"的原则保留原样。
+# 把 lite 用进你的新项目
 
 这份教程写给**第一次接触 lite、要在自己的新项目里用它的你** —— 不是框架维护者。
 lite 是一个"无虚拟 DOM + 编译期绑定"的 TSX 框架：运行时零依赖，只需要 Node + Vite，
 TSX 由一个小插件在编译期折成运行时调用，之后只有"读过某个状态的那一处 DOM"会被更新。
 
-框架本身的**设计取舍与踩坑史**不在本文，见 [`design.md`](design.md)（那篇是给要改框架的人看的）。
+框架本身的**设计取舍**见 [`design.md`](design.md)，踩到坑时的排查见
+[`pitfalls.md`](pitfalls.md)。
 
-**先说结论（首选）**：`npm i -D @asunajs/lite`（或 git 依赖 `git+https://github.com/asunajs/lite.git#v0.1.1`
-—— ⚠ 别用 `github:` 简写，npm 把它解析成 `git+ssh://`，公开仓也要密钥 ⇒ CI 装不上）→
-`import lite from '@asunajs/lite/vite'` 接插件 → tsconfig 里用 `@asunajs/lite/jsx` 拿全局 JSX 类型。
-**全程不需要 Vue**（本文第 4 节里每个结论都有跑过的命令）。
+**先说结论（首选）**：`npm i -D @asunajs/lite`（或 git 依赖
+`git+https://github.com/asunajs/lite.git#v0.1.2` —— ⚠ 别用 `github:` 简写，
+npm 把它解析成 `git+ssh://`，公开仓也要密钥 ⇒ CI 装不上）→
+`import lite from '@asunajs/lite/vite'` 接插件 → tsconfig 里用 `@asunajs/lite/jsx`
+拿全局 JSX 类型。
 
 包对外有**四个入口**，各管一件事：
 
@@ -24,45 +22,41 @@ TSX 由一个小插件在编译期折成运行时调用，之后只有"读过某
 | `./compiler` | 编译器（`dist/compiler.js`）—— 想自己接 rollup / esbuild 时用 | 非 Vite 构建工具 |
 | `./jsx` | 全局 JSX 类型（`jsx.d.ts`，零运行时代码） | tsconfig 的 `types` 字段（§3、§4） |
 
-另一种同样成立的用法是**把源码拷进你的项目**（§1 的第二种用法）——
-适合要改框架、或不想多一个依赖的场景。两条路只有"入口从哪来"不同，
-接插件（§2）、配 tsconfig（§3）、JSX 类型（§4）的思路完全一样。
+另一种同样成立的用法是**把源码拷进你的项目**（§1）—— 适合要改框架、或不想多一个依赖的场景。
+两条路只有"入口从哪来"不同，接插件（§2）、配 tsconfig（§3）、JSX 类型（§4）的思路完全一样。
 
-> ⚠ **2026-10-01 工具链变更**：编译器不再用 `typescript` 包解析 TSX，改用 **`oxc-parser`**
-> （见 [`design.md`](design.md) §4.6）。类型检查是**另一条路**，跟编译器无关：`tsc --noEmit`（`typescript@5`）
-> 或原生的 `tsgo --noEmit`（`@typescript/native-preview`）都行 —— 本仓现在用 tsgo，
-> 两者对**当时 mcloud 的 web 源码**结论一致（实测：同样的 158 个文件、都 exit 0；
-> ⚠ 那是 mcloud 迁移期的读数，本仓的 tsconfig 覆盖的文件少得多）。
-> 下文凡是写"装 `typescript@^5`才能编译""`tsc --noEmit`"的地方，按这条读。
+> **工具链**：编译器用 **`oxc-parser`**（原生 napi 包）解析 TSX，`typescript` 包不在依赖里。
+> 类型检查是**另一条路**：`tsc --noEmit`（`typescript@5`）或原生的 `tsgo --noEmit`
+> （`@typescript/native-preview`）都行 —— 本框架自己用 tsgo。
 
 ---
 
-## 0. 迁移前要知道的前提
+## 0. 开始前要知道的前提
 
 这些是"接了才知道"的东西，先看一遍能省掉大半天：
 
 1. **需要真 DOM，没有 SSR / 水合。** `template()` 走 `document.createElement('template')`，
    `mount()` 也要 `document` —— 首屏就是真节点。
    ⚠ 这些源码是**给打包器看的**：模块内部用的是无扩展名的相对导入（`./signal`），
-   Node 直接 `import` 会先报 `Cannot find module '…/src/signal'`（实测）——
+   Node 直接 `import` 会先报 `Cannot find module '…/src/signal'` ——
    所以也别指望"先在 Node 里 import 一下试试"。
-2. **目标环境 ES2022 起步。** 运行时用了 `<template>` + `cloneNode`、`?.` / `??`；构建目标写 `es2022`。
+2. **目标环境 ES2022 起步。** 运行时用了 `<template>` + `cloneNode`、`?.` / `??`；
+   构建目标写 `es2022`。
 3. **没有重渲染。** 组件函数体**只跑一次**，之后更新由编译期生成的细粒度绑定各自负责。
    ⇒ 组件体顶层算出来的值是**死的**，派生值必须写进 JSX（§6.1）。
 4. **更新是同步的。** 写 `.value` 那一刻 DOM 就变了，没有 `nextTick`、没有微任务批处理。
    一次改多个信号要合成一次刷新，用 `batch()`（§7）。
-5. **状态惯例是模块级 `ref`。** "建一个只导出 ref 的模块，谁 import 谁用"就是这个框架的状态管理；
-   模块级 ref 是**全应用唯一**的 —— 同一页面挂两个 App 实例会共享同一份状态。
+5. **状态惯例是模块级 `ref`。** "建一个只导出 ref 的模块，谁 import 谁用"就是这个框架的
+   状态管理；模块级 ref 是**全应用唯一**的 —— 同一页面挂两个 App 实例会共享同一份状态。
    要按实例隔离，就在组件体内 `ref()`（组件体只跑一次，正好一个实例一份）。
 6. **编译器需要 `oxc-parser`；类型检查要另配一个 TypeScript 实现。** 两件事互不相干：
-   * **构建**：`compiler.ts` 用 `oxc-parser`（原生 napi 包）解析 TSX，**与 `typescript` 包无关**。
-     ⚠ 它是原生模块 ⇒ 打包器里要标 external（本仓见 `regress/check.vite.config.ts`）。
+   * **构建**：`compiler.ts` 用 `oxc-parser`（原生 napi 包）解析 TSX，与 `typescript` 包无关。
+     ⚠ 它是原生模块 ⇒ 打包器里要标 external（本框架见 `regress/check.vite.config.ts`）。
    * **类型检查**：TSX 的类型检查必须有 TypeScript 实现 —— `typescript@5` 的 `tsc --noEmit`，
-     或原生的 `tsgo --noEmit`（`@typescript/native-preview`）。本仓用 tsgo（快，0.5s）。
-     ⚠ 2026-10-01 之前这里写的是"编译器用的是 TypeScript 5 的 JS API，装 7 会炸" ——
-     那条**只对当时的编译器**成立，现在编译器跟 TS 包已经没关系了。
-7. **没有这些东西**：SSR、水合、Teleport / Transition / Suspense / 异步组件 / 指令、`provide` / `inject`、
-   `reactive`、`nextTick`、事件委托、模板引用（`ref=`）。全表见 §10、§12。
+     或原生的 `tsgo --noEmit`（`@typescript/native-preview`）。
+7. **没有这些东西**：SSR、水合、Teleport / Transition / Suspense / 异步组件 / 指令、
+   `provide` / `inject`、`reactive`、`nextTick`、事件委托、模板引用（`ref=`）。
+   全表见 §10 与 §12。
 8. **构建工具**：官方只提供 Vite 插件。想接别的（rollup / esbuild / webpack），
    得自己调 `compiler.ts` 的 `compile()` —— 那是另一件事，本文不覆盖。
 
@@ -71,15 +65,15 @@ TSX 由一个小插件在编译期折成运行时调用，之后只有"读过某
 ## 1. 拿到框架
 
 **首选：装包**（本文开头那三行）。装完不用管目录结构，`@asunajs/lite/...` 那四个入口
-就是全部对外面。
+就是全部对外的面。
 
 **另一种用法：把源码拷进你的项目** —— 适合要改框架、或不想多一个依赖的场景。
-把本仓（`asunajs/lite`）的源码文件拷进你的项目（下面按拷到 `vendor/` 举例），
-路径就从 `@asunajs/lite/...` 变成 `./vendor/...`。**本仓（= 你拷进去的那一层）的真实布局**：
+把框架仓库（`asunajs/lite`）的源码文件拷进你的项目（下面按拷到 `vendor/` 举例），
+路径就从 `@asunajs/lite/...` 变成 `./vendor/...`。**仓库根（= 你拷进去的那一层）的真实布局**：
 
 ```
 your-project/
-├─ vendor                ← 本仓整份拷进来（这一层就是仓库根）
+├─ vendor                ← 整份拷进来（这一层就是仓库根）
 │  ├─ src/
 │  │  ├─ index.ts       ← 对外 API 的唯一入口，业务代码只 import 这里
 │  │  ├─ signal.ts      ← 响应式核心：ref / effect / batch / watch + 组件作用域归属 + 循环护栏
@@ -95,19 +89,17 @@ your-project/
 │  ├─ demo/  bench/  regress/   ← 框架自己的验收夹具（可以不用拷）
 │  ├─ size.mjs          ← 运行时体积统计
 │  ├─ chrome-flags.mjs  ← 无头 Chrome 的公共启动参数（demo/bench 共用）
-│  └─ docs/             ← 本仓这三份文档（guide / design / postmortem）
+│  └─ docs/             ← 这三份文档（guide / design / pitfalls）
 ├─ src/…                ← 你自己的代码
 ├─ index.html
 ├─ vite.config.ts
 └─ tsconfig.json
 ```
 
-⚠ 2026-09-30 之前这里还多两个文件：`src/store.ts`（`createStore` / `field`）与
-`computed` —— 它们**只为兼容 Vue 的词汇表而留**，普查里 0 处使用，随兼容层一起删了。
-现在运行时是**六份文件**（`src/` 下：`index` / `signal` / `dom` / `control` / `component` / `dev`）、
-**四个响应式原语**（`ref` / `effect` / `batch` / `watch`），别再按老清单去凑 `computed`。
-（`dev.ts` 是开发态诊断，也是运行时的一部分 —— 它进产物，但 `DEV` 在生产构建里被折成 `false`，
-整块被压缩器删掉。）
+运行时是**六份文件**（`src/` 下的 `index` / `signal` / `dom` / `control` / `component` / `dev`）、
+**四个响应式原语**（`ref` / `effect` / `batch` / `watch`）—— 没有 `computed`、没有 `reactive`、
+没有 `createStore`。`dev.ts` 也是运行时的一部分：它进产物，但 `DEV` 在生产构建里被折成
+`false`，整块被压缩器删掉。
 
 **必须一起拷的**：
 
@@ -115,7 +107,7 @@ your-project/
 |---|---|
 | `src/` 六个文件 | 它们互相 import，只拷 `index.ts` 起不来 |
 | `compiler.ts` + `ast.ts` | `vite.ts` 直接 import `compiler.ts`，它再 import `ast.ts`；少任一个，构建期就报模块找不到 |
-| `vite.ts` | 没插件 ⇒ JSX 没人折，下游转换器会按 React 语义去转（§3） |
+| `vite.ts` | 没插件 ⇒ JSX 没人折，下游转换器会按 React 语义去转（§2） |
 | `jsx.d.ts` | 类型检查对每个标签报 `TS7026`（§4） |
 
 **可以不用拷的**：`demo/`、`bench/`、`regress/`、`size.mjs`、`chrome-flags.mjs` ——
@@ -125,32 +117,20 @@ your-project/
 **运行时零依赖**：`src/**` 不 import 任何外部包，只用 DOM 与 ES2022。
 **构建期依赖两个**：`vite` 与 `oxc-parser`（`compiler.ts` → `ast.ts` 用它解析 TSX）——
 装包时 `oxc-parser` 由 `@asunajs/lite` 带进来，只有"拷目录"那条路要自己装；
-类型检查再另加一个 TypeScript 实现（本仓用 `@typescript/native-preview`）：
+类型检查再另加一个 TypeScript 实现：
 
 ```bash
 npm i -D vite oxc-parser                 # 拷目录时；装包的话 oxc-parser 已在依赖里
 npm i -D @typescript/native-preview      # 只为 `tsgo --noEmit`；用 typescript@5 的 tsc 也行
 ```
 
-> 验证环境：**Node 24.16.0 + npm 11.13.0 + vite 8.3.1 + oxc-parser 0.152.0
-> + tsgo 7.0.0-dev**（2026-10-01 起；在那之前是 vite 8.3.1 + typescript 5.9.3）。
+> 验证环境：**Node 24 + vite 8.3.x + oxc-parser 0.152.x + tsgo 7.0.0-dev**。
 > 更老的 Vite 也能用（插件 API 很基础），但 §3.2 里那条 alias 差异要注意。
 
-业务代码用到的 API 就是下面这些（`src/index.ts` 的全部导出）：
+业务代码用到的 API 就是 §12 那张表（`src/index.ts` 的全部导出）。
 
 > ⚠ 下文所有示例里 import 的模块名都写 **`'lite'`** —— 那是 §2 **拷目录**那条路配的裸名 alias。
 > 走**装包**那条路时把它读成 **`'@asunajs/lite'`** 即可，其余一字不差。
-
-| 分类 | API |
-|---|---|
-| 状态 | `ref` `effect` `batch` `watch`（就这四个；`computed` / `reactive` / `nextTick` **没有**） |
-| 组件 | 普通函数组件 + `mount` `useSlots` `onMounted` `onUnmounted`，类型 `Component` / `Slots` / `Ref` |
-| 编译产物用的 helper | `template` `setNodes` `setClass` `setAttr` `setProp` `setValue` `on` `spread` `createFor` `createComponent` `lazySlot` `remove` |
-| 运行时内部件 | `createNodes` `insert` `onRemove` —— 只有框架自己和 demo/bench 该碰 |
-
-第三类**只有编译产物在用**，业务代码不要手写；第四类连编译产物都不直接用，是前三类的实现细节。
-`renderEffect` 这个名字已经没了（它是"与 Vapor 词汇表对齐"的别名，2026-09-30 随兼容层删除）——
-现在就叫 `effect`。
 
 ---
 
@@ -191,20 +171,19 @@ export default defineConfig({
 
 * **TSX 是插件编译的，不是下游转换器编译的。** 插件 `enforce: 'pre'`，先于下游
   拿到**还带着 JSX 的**源码，把 JSX 折掉、保留 TS 语法，再交给下游去类型。
-  ⚠ 下游是**谁**会变：Vite 7 是 esbuild，**Vite 8.3 是 rolldown/oxc**（实测 Vite 8 的
-  依赖里没有 esbuild 这个包）⇒ 文档与注释只说"下游"，别写死工具名（2026-10-01 改）。
+  ⚠ 下游是**谁**会变：Vite 7 是 esbuild，Vite 8.3 是 rolldown/oxc ⇒
+  文档与注释只说"下游"，别写死工具名。
   所以**不需要 Vue、不需要 vue-jsx-vapor、不需要 `@vitejs/plugin-vue`**：
-  实测一个零 Vue 工程 build 出单 chunk `index-*.js 8.31 kB`（gzip 3.76 kB，含两个组件 + 列表 + 表单）。
-  ⚠ 这个读数是 **2026-09-30 之前**量的；此后运行时自身又瘦了 **337 B gzip**
-  （诊断代码改成编译期剥离，见 [`design.md`](design.md) §5），
-  这个最小工程的数**没有复测** —— 按同样口径它应当落在 gzip ≈ 3.4 kB。
+  一个零 Vue 工程照常 build 出单 chunk。
 * 插件默认只处理 `.tsx`，并跳过 `node_modules`；`include` 选项可以改。
-* `runtime` 决定**生成代码 import 谁**，默认值就是包名 `'@asunajs/lite'` —— 装包那条路不传参数也对。
-  拷目录时推荐**裸名 + alias**：编译产物可能落在任意深度的源文件里，用相对路径会随文件位置解析到
-  不同的地方。配了裸名，就要 §3 的 `paths` 与这里的 `alias` 都在。
+* `runtime` 决定**生成代码 import 谁**，默认值就是包名 `'@asunajs/lite'` ——
+  装包那条路不传参数也对。拷目录时推荐**裸名 + alias**：编译产物可能落在任意深度的
+  源文件里，用相对路径会随文件位置解析到不同的地方。配了裸名，就要 §3 的 `paths`
+  与这里的 `alias` 都在。
 * `build.target: 'es2022'` 与运行时用到的语法对齐（§0.2）。
 * 开发/构建就是普通 Vite 用法：`npx vite`（dev）、`npx vite build`、`npx vite preview`。
-* CSS 方案与 lite 无关（Tailwind / 手写 CSS / CSS Modules 都行）。注意 `class` 只能传字符串（§10）。
+* CSS 方案与 lite 无关（Tailwind / 手写 CSS / CSS Modules 都行）。
+  注意 `class` 只能传字符串（§10）。
 
 ---
 
@@ -231,7 +210,7 @@ export default defineConfig({
 }
 ```
 
-`"types"` 那一项是**新口径**：`@asunajs/lite/jsx` 只交类型（§1 的四个入口之一），
+`"types"` 那一项：`@asunajs/lite/jsx` 只交类型（§1 的四个入口之一），
 `vite/client` 是给 `import.meta.env` 用的。业务代码 import 运行时写包名 `'@asunajs/lite'`，
 `moduleResolution: "bundler"` 会顺着 `exports` 找到 `src/index.ts` —— **不需要**再写 `paths`。
 
@@ -262,12 +241,14 @@ export default defineConfig({
 
 两层原因，第二层是坑：
 
-1. **类型检查**：非 `preserve`（比如从 React 模板抄来的 `"react-jsx"`）时，tsc 会按 React 语义去找
-   `react/jsx-runtime`。实测：
+1. **类型检查**：非 `preserve`（比如从 React 模板抄来的 `"react-jsx"`）时，tsc 会按 React
+   语义去找 `react/jsx-runtime`。实测：
+
    ```
    src/main.tsx(59,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist,
    but none could be found. Make sure you have types for the appropriate package installed.
    ```
+
 2. **构建侧**：下游转换器也会读 tsconfig 的 `jsx` 设置。正常情况下插件已经把 JSX 折掉了，
    轮不到它；可一旦插件没覆盖到（文件不是 `.tsx`、被 `include` 排除、插件顺序被改），
    JSX 就会落到它手里被按 **React 语义**编译，**运行期才炸**。
@@ -279,8 +260,8 @@ export default defineConfig({
 ⚠ 这一节只对**拷目录**那条路成立。装包那条路既不用 `paths` 也不用 `alias` ——
 `'@asunajs/lite'` 本身就是个能解析的包名（§3 开头）。
 
-两种写法都支持，**实测可以在同一个工程里混用**（一个文件裸名、另一个文件相对路径，一次
-tsc + build 全绿）：
+两种写法都支持，**可以在同一个工程里混用**（一个文件裸名、另一个文件相对路径，
+一次 tsc + build 全绿）：
 
 | 写法 | 需要配什么 |
 |---|---|
@@ -290,8 +271,8 @@ tsc + build 全绿）：
 * 裸名少一处就报错，报错长得不一样：
   * 只有 tsconfig 没配 `paths` → `error TS2307: Cannot find module 'lite' or its corresponding type declarations.`
   * 只有 Vite 没配 `alias` → `Error: [vite]: Rolldown failed to resolve import "lite" from "/…/src/main.tsx".`
-* 一个版本差异：**Vite 8 会自己读 tsconfig 的 `paths`**（实测只配 `paths`、不配 `alias` 也能 build）；
-  更早的 Vite 不读（这个能力是后加的，本文没测旧版本）。两处都配最稳，配了不会冲突。
+* 一个版本差异：**Vite 8 会自己读 tsconfig 的 `paths`**（实测只配 `paths`、不配 `alias`
+  也能 build）；更早的 Vite 不读。两处都配最稳，配了不会冲突。
 * `paths` 里的路径按 tsconfig 所在目录解析，`baseUrl` 可以不写。
 * 相对路径的代价：插件生成代码里的 import 也是相对路径，**按每个源文件的深度**解析 ——
   只有你的 TSX 都在同一层目录时才省心，这也是推荐裸名的原因。
@@ -299,9 +280,10 @@ tsc + build 全绿）：
 ### 3.3 别的几项
 
 * `lib` 必须含 `DOM`（运行时需要真 DOM）。
-* `allowImportingTsExtensions` + `noEmit`：**只有拷目录那条路要它** —— 那里 `vite.config.ts` 写的是
-  `import lite from './vendor/vite.ts'`（`vite.ts` 里又 `import { compile } from './compiler.ts'`），
-  显式写 `.ts` 扩展名需要这个开关，且必须不 emit。装包那条路 import 的是包名，用不着它。
+* `allowImportingTsExtensions` + `noEmit`：**只有拷目录那条路要它** —— 那里
+  `vite.config.ts` 写的是 `import lite from './vendor/vite.ts'`（`vite.ts` 里又
+  `import { compile } from './compiler.ts'`），显式写 `.ts` 扩展名需要这个开关，
+  且必须不 emit。装包那条路 import 的是包名，用不着它。
 * JSX 类型怎么进程序，两条路不一样：
   * **装包**：靠 `types` 字段里的 `"@asunajs/lite/jsx"`（§3 开头那份 tsconfig）。
   * **拷目录**：靠 `include` 覆盖拷进来的那一层（`jsx.d.ts` 在里面）。
@@ -310,7 +292,7 @@ tsc + build 全绿）：
 
 ---
 
-## 4. JSX 类型：迁移时最容易卡住的一步 ⭐
+## 4. JSX 类型：接入时最容易卡住的一步
 
 **背景**：`src/**` 与 `compiler.ts` 里**没有任何 JSX 类型声明**（没有 `namespace JSX`）——
 类型检查是 tsc 的事，lite 的编译器管不着。没有声明时，每个标签都报：
@@ -323,8 +305,9 @@ error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.In
 
 * `IntrinsicElements`：HTML / SVG / 自定义元素，**属性宽松**（`class={…}`、`disabled={false}`、
   `data-*`、`aria-*` 一律放行）；
-* 函数组件：`type ElementType = string | ((props: any, ctx: any) => unknown)` —— 标签合法性由它把关，
-  而 **props 仍按你声明的类型校验**；返回值不卡（`cond ? <A /> : null` 是合法组件返回值）；
+* 函数组件：`type ElementType = string | ((props: any, ctx: any) => unknown)` ——
+  标签合法性由它把关，而 **props 仍按你声明的类型校验**；返回值不卡
+  （`cond ? <A /> : null` 是合法组件返回值）；
 * 片段、`key`；
 * 子节点：`ElementChildrenAttribute` + `LibraryManagedAttributes` 让
   `<Panel title="x">…</Panel>` 直接可用 —— **props 上不用、也不该**声明 `children`
@@ -332,47 +315,24 @@ error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.In
 
 里面有两处是"不写就报错"的细节，值得知道原因：
 
-* `type Element = unknown`：JSX 表达式的值可以是节点 / 节点数组 / `null`。收紧了就会把条件分支写法卡死。
+* `type Element = unknown`：JSX 表达式的值可以是节点 / 节点数组 / `null`。
+  收紧了就会把条件分支写法卡死。
 * `[attr: \`on${string}\`]: ((e: any) => void) | undefined`：属性表只有笼统索引签名时，
   `onClick={(e) => …}` 里的 `e` 拿不到上下文类型，strict 下报
   `TS7006: Parameter 'e' implicitly has an 'any' type`。事件参数写成 `any` 是**故意的** ——
   运行期给的是原生事件对象（`Event` / `MouseEvent` / `InputEvent`…），类型系统推不出来；
   要精确类型就自己标注：`onInput={(e: InputEvent) => …}`。
 
-### 路径 ①：用 lite 自带的类型（推荐，零 Vue 依赖）
-
-做法：**让 `jsx.d.ts` 进程序**，**不要写 `jsxImportSource`**。就这两件事。
+**做法只有两件事**：让 `jsx.d.ts` 进程序，**不要写 `jsxImportSource`**。
 进程序有两条路，按 §1 你选的那种用法挑一条：
 
 * **装包**：`compilerOptions.types` 里写 `"@asunajs/lite/jsx"`（§3 开头那份 tsconfig）；
 * **拷目录**：`include` 里带上拷进来的那一层（`jsx.d.ts` 在里面）。
 
-**跑过的命令与结果**（`/tmp` 里新建的最小工程：把框架源码拷进去、`npm i -D vite typescript@^5`、
-**没有安装 Vue / vue-jsx-vapor**，业务代码是一个 `.map()` + 插槽 + 片段 + 表单的小页面。
-⚠ 这次实测是**2026-09-29/30 在拷贝用法下**做的，那时 `jsx.d.ts` 还是靠 `include` 进程序；
-今天装包那条路走 `types` 字段，结论不变、入口不同）：
+⚠ **不要写 `jsxImportSource`**：那条路是给 React/Vue 那类"从 JSX 运行时导入"的框架用的，
+一写就会去读那个包的模块声明，这份全局声明**整个失效**（回到 `TS7026`）。
 
-```
-$ npx tsc --noEmit
-（无输出，退出码 0）
-
-$ npx vite build
-vite v8.3.1 building client environment for production...
-transforming...
-✓ 11 modules transformed.
-rendering chunks...
-computing gzip size...
-dist/index.html                0.25 kB │ gzip: 0.21 kB
-dist/assets/index-DbpC-hsm.js  8.31 kB │ gzip: 3.76 kB
-
-✓ built in 50ms
-```
-
-把产物塞进无头 Chrome 跑了一遍（`chrome-headless-shell --dump-dom file://…/inline.html`）：
-键控列表、片段、插槽、SVG spread、条件行、`disabled`、`<select>` 的 value 全部渲染正确 ——
-这份类型能配出一个**真能跑**的新工程，不只是"能过类型检查"。
-
-**类型不是形同虚设**（同一工程里放了一个故意写错的负向样例）：
+**类型不是形同虚设**（在一个最小工程里放了一个故意写错的负向样例）：
 
 ```
 $ npx tsc -p tsconfig.negative.json
@@ -383,59 +343,6 @@ negative/negative.tsx(13,6): error TS2322: Type '{ label: string; }' is not assi
 negative/negative.tsx(15,25): error TS2322: Type 'unknown' is not assignable to type 'string'.
 （退出码 2）
 ```
-
-### 路径 ②：沿用 `vue-jsx-vapor` 的类型（存量 Vue 项目过渡用）
-
-⚠ **本节是 2026-09-29 的一次性实测，本仓已不再维护这条路**（`vue` / `vue-jsx-vapor`
-已从使用方 mcloud 仓库的 `web/package.json` 里删掉，`node_modules` 里也搜不到这两个包 ⇒
-下面那些命令**在那边的当时都重跑不了**；本仓更是从来没有过这两个依赖）。
-留着的理由只有一个：**已经有一整套 Vue 类型的外部项目**照它切换时不用改类型。
-新项目请直接走路径 ①；本仓的闸门也只验证路径 ①。
-
-做法：`"jsxImportSource": "vue-jsx-vapor"`，**不要**让 `jsx.d.ts` 进程序（§4 路径 ①）。
-这条路是给"已经有一整套 Vue + vue-jsx-vapor 类型、暂时不想动"的项目准备的 ——
-新项目走它等于**为了类型背上 Vue**，这正是路径 ① 存在的理由。
-
-**当时跑过的命令与结果**（`/tmp` 里另建一个同源工程，`jsxImportSource` 指向 `vue-jsx-vapor`，
-`node_modules` 软链到已有的 vue 3.6.0-rc.9 + vue-jsx-vapor 3.2.25，**没有新装 Vue**）：
-
-```
-$ npx tsc --noEmit
-（无输出，退出码 0）
-
-$ npx tsc --noEmit --listFiles | grep -i vue-jsx-vapor
-node_modules/@vue-jsx-vapor/runtime/dist/types.d.ts
-node_modules/@vue-jsx-vapor/runtime/dist/h.d.ts
-node_modules/@vue-jsx-vapor/runtime/dist/jsx.d.ts
-…（确实在用 vue-jsx-vapor 的 JSX 命名空间）
-
-$ npx vite build
-✓ built in 59ms
-dist/assets/index-DbpC-hsm.js  8.31 kB │ gzip: 3.76 kB     ← 与路径 ① 同 hash（源码相同，构建与类型来源无关）
-```
-
-**反向对照**（证明上面那次通过不是碰巧）：把 `jsxImportSource` 删掉、也不 include lite 的声明，
-立刻回到 `TS7026` —— 说明通过确实是 vue-jsx-vapor 的类型在起作用：
-
-```
-$ npx tsc -p tsconfig.nojsxsource.json
-src/main.tsx(21,5): error TS7026: JSX element implicitly has type 'any' because no interface
-  'JSX.IntrinsicElements' exists.
-（退出码 2）
-```
-
-**未验证**：`vue-jsx-vapor` 的宏能力（那套要配 `@ts-macro/tsc`）没在新工程里试。
-本教程只用 `tsc --noEmit` 验证过"JSX 类型这条路走得通"。
-
-### 两条路怎么选
-
-| | 路径 ①（`jsx.d.ts`） | 路径 ②（`vue-jsx-vapor`） |
-|---|---|---|
-| 依赖 | 只多一个 `jsx.d.ts` | 多 `vue` + `vue-jsx-vapor` |
-| 适合 | **新项目**、非 Vue 项目 | 已有 Vue 类型体系、只把 TSX 换成 lite |
-| 实测 | `tsc` 0 错、build 通过、浏览器渲染正确 | 2026-09-29 那次 `tsc` 0 错、build 通过；**使用方 mcloud 仓库已卸掉 Vue，之后不再验证** |
-
-两种声明同时存在也不会报错（实测退出码 0），但没必要，二选一更清楚。
 
 ---
 
@@ -458,13 +365,12 @@ const Counter = () => {
 mount(Counter, '#app')
 ```
 
-⚠ 以前这里写的是 `createVaporApp(Counter).mount('#app')` —— 那是**从 Vue 迁过来时**
-为了"入口一行都不用改"留的壳，2026-09-30 壳删了。`mount(组件, 目标)` 就是唯一写法，
-它**返回卸载器**（mcloud 那边没人接：整棵树只挂一次，切页靠信号）。
+`mount(组件, 目标)` 就是唯一写法：第二个参数接选择器或元素
+（`mount(Counter, document.body)` 也行），它**返回卸载器**（整棵树只挂一次的应用通常不用接）。
 
 没有组件注册、没有依赖声明、没有 `setup()`。这段**编译出来的样子**（下面整段是
-`compiler.ts` 的真产物，不是示意 —— 想看自己那份，跑 `npm run test:demo`
-之后看 `/tmp/lite-demo.compiled.js`）：
+`compiler.ts` 的真产物，不是示意 —— 想看自己那份，跑 `npm run test:demo` 之后看
+`/tmp/lite-demo.compiled.js`）：
 
 ```js
 import { mount, ref } from 'lite'
@@ -491,8 +397,7 @@ mount(Counter, '#app')
 * 写 `n.value` 是同步的，那个文本节点立刻就变了 —— 没有 diff、没有重跑组件体。
 
 注意生成的 helper 都带 `_$` 前缀（`_$setNodes` / `_$on` / `_$template` …）：
-它们与你在源文件里自己 import 的那批名字**不会撞车**，所以业务代码里
-不用避讳任何标识符。
+它们与你在源文件里自己 import 的那批名字**不会撞车**，所以业务代码里不用避讳任何标识符。
 
 ---
 
@@ -514,8 +419,7 @@ return <span>{label}</span>
 return <span>{loading.value ? '正在加载…' : '完成'}</span>
 ```
 
-⚠ 以前这里还要包一层 `defineVaporComponent(fn)`（恒等函数，只为迁移期不用改写法）。
-那个壳 2026-09-30 已删 —— **直接写箭头函数就是组件**，没有任何注册表。
+**直接写箭头函数就是组件**，没有任何注册表、没有 `defineComponent` 那类包装。
 
 ### 6.2 props
 
@@ -529,7 +433,8 @@ props 是普通对象；**动态 prop 在编译期写成 getter**：
 所以"读 `props.label` 的那一下"才是建立依赖的地方：
 
 * 在 JSX 里读：`{props.label}` ✔
-* `const { label } = props` ✗ —— 组件体那一次把 getter 求值成了死值，之后不再更新（而且不报错）。
+* `const { label } = props` ✗ —— 组件体那一次把 getter 求值成了死值，之后不再更新
+  （而且不报错）。
 * `props.label` 就是**值**，不是函数。不要写 `props.label()`。
 
 ### 6.3 子节点 = 插槽
@@ -551,9 +456,10 @@ const Panel = (props: { title: string }) => {
 }
 ```
 
-* **`props.children` 永远是 `undefined`** —— 子节点不进 props，别读它（类型上也不用声明，见 §4）。
+* **`props.children` 永远是 `undefined`** —— 子节点不进 props，别读它（类型上也不用声明，§4）。
 * 插槽是**惰性**的：不调用 `slots.default?.()` 就不创建。
-* JSX 也可以当普通 prop 传：`<Dialog impact={<span>…</span>} />`，编译器会把这段 JSX 一起编掉。
+* JSX 也可以当普通 prop 传：`<Dialog impact={<span>…</span>} />`，编译器会把这段 JSX
+  一起编掉。
 
 ### 6.4 组件的"事件"就是函数 prop
 
@@ -564,20 +470,18 @@ const Panel = (props: { title: string }) => {
 
 `key` **只对 `.map()` 返回的那个元素有意义**（§8.2）—— 它是交给 `createFor` 的复用键。
 
-⚠ 写在别处（普通元素、组件、条件分支的分支里、片段里）现在**直接编译失败**，
+写在别处（普通元素、组件、条件分支的分支里、片段里）现在**直接编译失败**，
 报"这里的 `key` 什么都不做…"并带 `文件名:行号`。以前它是**静默丢掉**的，
 于是"以为列表有 key、其实 key 挂在别的层"这种错永远发现不了 ——
 而 lite 没有"按 key 决定复不复用"的那一次 diff，删掉它不会改变行为。
-（负例用例四条守着这四种位置，见 [`design.md`](design.md) §7。）
+（编译期负例守着这四种位置，见 [`design.md`](design.md) §7。）
 
 ---
 
 ## 7. 状态
 
 `src/index.ts` 导出的状态 API **就四个**：`ref` `effect` `batch` `watch`。
-
-⚠ 老文档这里还列着 `computed` / `createStore` / `field` —— 它们**已经不存在了**
-（2026-09-30 随 Vue 兼容层删除：普查 0 处使用，只为"词汇表和 Vue 一样"而留）。
+没有 `computed` / `reactive` / `nextTick` / `createStore`。
 派生值就写进 JSX（§6.1）或用一个模块级 `ref` + 在写的那一处同步更新。
 
 ### ref
@@ -592,8 +496,8 @@ n.value++
 * **没有 `reactive`、没有 Proxy、没有 store 这一层。** 共享状态的做法就是**模块级 ref**：
   建一个只导出 ref 的模块，谁 import 谁用。
   ⚠ 模块级 ref 是全应用唯一的：同页多实例会共享（§0.5）。要按实例隔离就在组件体内建 ref。
-* 对象的字段**不会**自己响应式：改了对象内部要换引用（`items.value = [...items.value, x]`），
-  或者为那个字段单开一个 ref。
+* 对象的字段**不会**自己响应式：改了对象内部要换引用
+  （`items.value = [...items.value, x]`），或者为那个字段单开一个 ref。
 
 ### effect
 
@@ -609,18 +513,15 @@ e.dispose()   // 停用它（解绑所有依赖，之后不再跑）
 * **编译器生成的绑定**按**节点**记账 —— 节点被 `remove()` 摘走时连带销毁。列表删一行，
   停的就是那一行那几条绑定，不用等整页卸载。
 * **你在组件体内手写的 `effect()` / `watch()`**按**组件实例**记账 —— 组件卸载即停，
-  不需要你自己记得 `dispose()`。（2026-09-30 起才有这条：在此之前手写的 effect
-  在组件卸载后还活着，回调读到的是旧实例的状态。）
+  不需要你自己记得 `dispose()`。
   只有在**组件外面**（模块级）建的才真需要自己拿句柄停。
 
-⚠ 两个互写的信号（`A` 的 effect 写 `B`、`B` 的 effect 写 `A`）现在会**抛错**：
+⚠ 两个互写的信号（`A` 的 effect 写 `B`、`B` 的 effect 写 `A`）会**抛错**：
 "[lite] 循环更新 …"，超过 100 层/轮就中断。
 以前是把调用栈打爆（`RangeError: Maximum call stack size exceeded`），
 而爆栈现场早被中途的 DOM 写入冲掉了。
 ⚠ 这条错误**不指名**是哪个 effect（给每条 effect 存标签是白付的字节），
 它只把范围收窄到"是互写，不是数据太多"。
-
-`renderEffect` 这个名字已经没了（它是"与 Vapor 词汇表对齐"时留的别名），现在只有 `effect`。
 
 ### watch
 
@@ -647,7 +548,7 @@ batch(() => { a.value = 1; b.value = 2 })
 
 ### 派生值没有原语，怎么办
 
-`computed` 删了（§7 开头）。两种写法够用：
+`computed` 没有。两种写法够用：
 
 ```tsx
 // ① 只在渲染里用 ⇒ 直接写进 JSX，那条绑定自己会重算
@@ -665,7 +566,7 @@ const toggle = (i: number) => {
 
 ②是"多算 JS、少碰 DOM"的那条老规矩：算在写入侧，渲染侧只读一个格子。
 真需要"读到才算 + 缓存"再说 —— 那段实现是**独立的一块**
-（一条订阅 `fn` 的 effect + 一个 `RefImpl` 输出），加上来运行时其余部分一行不用改。
+（一条订阅 `fn` 的 effect + 一个输出 ref），加上来运行时其余部分一行不用改。
 
 ---
 
@@ -700,13 +601,13 @@ const toggle = (i: number) => {
 * **同一个 key 但对象换了 ⇒ 重建那一行** —— 所以 key 要用稳定 id，
   别用会变的东西（拿数组下标当 key，数据一重排就等于每行都在重建）。
 * 删行会跑那一行组件的 `onUnmounted`。
-* 新建的行是**正序**插入的。这不是审美问题：`<select>` 的默认选中项由"第一个被插进来的选项"
-  决定，所以插入顺序会被用户看到。
+* 新建的行是**正序**插入的。这不是审美问题：`<select>` 的默认选中项由"第一个被插进来的
+  选项"决定，所以插入顺序会被用户看到。
 * ⭐ **渲染体读了第二个参数（下标）⇒ 重排时改为"重建那一行"**（编译器结构判断，
   生成 `createFor(…, positional=true)`）。因为那种行的内容真的依赖位置：
   搬过去不重算就会显示错的"第 N 步"。没读下标的行则是**搬动** ——
   保住行内焦点与输入框光标。**这一条与 Vue 有意不同**：Vue 的 keyed diff 不区分，
-  只会一律重建（`postmortem.md` §11.7 记的是同一类分歧）。
+  只会一律重建（这类差异见 [`pitfalls.md`](pitfalls.md) 的「与 Vapor 的已知差异」）。
   想知道自己那处编成了哪种：看产物里 `createFor` 的最后一个布尔参数。
 
 ⚠ **只有一种形状会编成 `createFor`**：箭头函数，且**函数体直接是一个 JSX 表达式**。
@@ -728,14 +629,15 @@ const toggle = (i: number) => {
 ### 属性
 
 * 字面量（字符串 / 数字）在编译期**折进模板串**，运行期一次写入都没有。
-  ⚠ `false` / `null` 不折：布尔属性写进 HTML 是"存在即为真"，`disabled={false}` 折进去会把按钮**打开**。
+  ⚠ `false` / `null` 不折：布尔属性写进 HTML 是"存在即为真"，`disabled={false}`
+  折进去会把按钮**打开**。
 * 动态值一个 effect 只写那一个属性。
 * 分派规则（编译期决定）：
   * `class` → `setClass`（SVG 元素走 `setAttribute`，因为 `SVGElement.className` 只读）；
   * `value` → `setValue`（property 与 attribute **都写**）；
   * `checked` `selected` `disabled` `open` `multiple` `readonly` `required` `muted` → `setProp`；
-  * 其余 → `setAttr`：`null` 移除属性；`false` 只有少数布尔属性算"移除"，其余序列化成 `"false"`
-    （所以 `aria-hidden={true}` 得到 `aria-hidden="true"`，不是空串）。
+  * 其余 → `setAttr`：`null` 移除属性；`false` 只有少数布尔属性算"移除"，
+    其余序列化成 `"false"`（所以 `aria-hidden={true}` 得到 `aria-hidden="true"`，不是空串）。
 * **`class` 只接字符串/三元**，**`style` 只接字符串**（§10 有后果）。
 * 动态文本优先**原地改 `.data`**（不重建节点）；换内容时才删旧建新。
 * `<select>` 上的 `value` 不需要你操心顺序：编译器把它排到子节点绑定**之后**，
@@ -747,7 +649,8 @@ const toggle = (i: number) => {
 <button onClick={(e: MouseEvent) => submit(e)}>提交</button>
 ```
 
-* 判据：属性名以 `on` 开头且**第三个字符大写**；事件名取剩下部分的小写（`onClick` → `click`）。
+* 判据：属性名以 `on` 开头且**第三个字符大写**；事件名取剩下部分的小写
+  （`onClick` → `click`）。
 * 处理器收到**原生** `Event`（不是合成事件），并被自动包一层 `batch`。
 * 没有事件委托：每个元素一个 listener。
 * ⚠ `onclick={fn}`（小写）**不是**事件，会变成一个属性，值是函数源码 —— 静默失效。
@@ -766,7 +669,7 @@ const toggle = (i: number) => {
 
 ## 10. 语法子集：哪些写法会出错
 
-编译器现在**会拦**这些（带 `文件名:行号`，2026-09-30 起一条条加起来的）：
+编译器**会拦**这些（带 `文件名:行号`）：
 
 | 写法 | 报的那一句含 |
 |---|---|
@@ -778,10 +681,10 @@ const toggle = (i: number) => {
 | 条件分支既不是 JSX 也不是 `null` | 条件分支只支持 JSX 或 null |
 | 组件写在静态位置（不是动态子节点） | 组件只能出现在动态子节点位置 |
 
-有 12 条负例用例守着这一张表（`npm run test:compiler`，纯 Node 秒级）。
-所以**这张表左列的写法不会"编过了但其实没生效"** —— 它一定红。
+编译期负例守着这一张表（`npm run test:compiler`，纯 Node 秒级；条数以脚本自己打印的
+那行为准，当前 13 条）。所以**这张表左列的写法不会"编过了但其实没生效"** —— 它一定红。
 
-但**下面这些仍然静默编错**（项目里 0 处使用 ⇒ 没做检测），别用：
+但**下面这些仍然静默编错**，别用：
 
 | 写法 | 结果 |
 |---|---|
@@ -804,62 +707,36 @@ const toggle = (i: number) => {
 1. **组件体只跑一次**：顶层别算响应式的值，写进 JSX（§6.1）。
 2. **别解构 props**（§6.2）。
 3. **别用顶层 `if (…) return <X/>`** 做分支（§8.1）。
-4. **`key` 只在 `.map()` 返回的那个元素上有意义**，而且回调必须是"表达式体直接返回 JSX"（§8.2）；
-   写在别处现在会**直接编译失败**，不再是静默丢掉。
+4. **`key` 只在 `.map()` 返回的那个元素上有意义**，而且回调必须是"表达式体直接返回 JSX"
+   （§8.2）；写在别处会**直接编译失败**，不再是静默丢掉。
 5. **`class` / `style` 只接字符串**（§10）。
 6. **事件名第二个词首字母要大写**：`onClick` 是事件，`onclick` 是字符串属性（§9）。
 7. **没有模板引用**，用 DOM 查找（§9）。
 8. **组件内外手写的 `effect` / `watch` 归谁管，不一样**：组件体内建的随组件销毁；
    **组件外**（模块级）建的没人管，要自己拿句柄 `dispose()`（§7）。
-9. **别指望 `computed`**：它已经不在了。派生值写进 JSX，或在写入侧顺手算一个 ref（§7）。
-10. **别手动增删 / 搬动框架生成的节点**：动态位置靠 `<!---->` 占位注释定位，模板子树是克隆出来的。
-    把它们挪走会让后续更新插错位置。
+9. **别指望 `computed`**：没有。派生值写进 JSX，或在写入侧顺手算一个 ref（§7）。
+10. **别手动增删 / 搬动框架生成的节点**：动态位置靠 `<!---->` 占位注释定位，
+    模板子树是克隆出来的。把它们挪走会让后续更新插错位置。
 
 ---
 
-## 12. 与 Vue 的差异（速查）
+## 12. API
 
-| | Vue / Vapor | lite |
-|---|---|---|
-| 更新模型 | 组件重渲染；Vapor 一个模板的动态属性共用一个 `renderEffect` | **没有重渲染**：一个绑定一个 effect，组件体只跑一次 |
-| 组件体顶层的派生值 | 会跟着更新 | **不会**，必须写进 JSX |
-| 更新时机 | 微任务批量刷 | **同步**刷；没有 `nextTick` |
-| 属性绑定粒度 | Vapor 改一个属性会顺带重写同一模板里的其它动态属性 | 细粒度：改 A 不动 B |
-| 卸载 | 组件实例卸载 | 节点被移除 ⇒ 该子树里的绑定销毁 + `onUnmounted` 跑；**组件体内手写的 `effect`/`watch` 也随组件销毁**（模块级建的要自己 dispose，§7） |
-| 列表重排 | keyed diff 一律"能搬就搬" | **区分两种**：渲染体读了下标 ⇒ 重建那一行；没读 ⇒ 搬动（保住行内焦点/光标，§8.2） |
-| 循环写入 | 调度器 + 警告 | **抛错**（100 层/轮上限，§7） |
-| provide/inject、指令、Teleport、Transition、Suspense、异步组件、`computed`、`nextTick` | 有 | 没有 |
-| 模板引用 | `ref=` | 没有，用 DOM 查找 |
-| 事件对象 | 元素事件是原生；组件事件走 `emit` | 原生 `Event`；组件上的 `onXxx` 只是普通 prop（§6.4） |
+业务代码只会用到这些（`src/index.ts` 的全部导出）：
 
-> 从 Vue 项目迁过来时**要注意的**：`ref` / `.value` / `onMounted` / `watch` / `.map()+key`
-> 这套写法是刻意对齐的，改 import 那一行基本就够 —— 但 **`computed` 与 `createStore` 没有**，
-> alias `'vue'` → lite 这条过渡路也**已经拆掉了**（2026-09-30）。
-> 也就是说：漏改的 `import { computed } from 'vue'` 现在会**直接报错**，不会静默跑错。
-> 迁移动作本身只剩两件事：把 `from 'vue'` 改成 `from 'lite'`、把构建插件换成 `vite.ts`（§2）。
+| 分类 | API |
+|---|---|
+| 状态 | `ref` `effect` `batch` `watch` |
+| 组件 | 普通函数组件 + `mount` `useSlots` `onMounted` `onUnmounted`；类型 `Component` / `Slots` / `Ref` |
+| 编译产物用 | `template` `setNodes` `setClass` `setAttr` `setProp` `setValue` `on` `spread` `createFor` `createComponent` `lazySlot` `remove` |
+| 运行时内部件 | `createNodes` `insert` `onRemove` |
+
+后两类**不要手写**：第三类是编译器生成的代码调的，第四类连编译器都不直接用。
 
 ---
 
-## 13. 附：本文里哪些是实测的
+## 13. 本文没验证的
 
-验证环境：macOS (arm64)、Node v24.16.0、npm 11.13.0、vite 8.3.1、typescript 5.9.3、
-无头 Chrome（chrome-headless-shell 149）。
-
-| 结论 | 怎么验证的 | 结果 |
-|---|---|---|
-| 零 Vue 的新工程能跑通 | `/tmp` 最小工程（`npm i -D vite typescript@^5`，无 Vue），`npx tsc --noEmit` + `npx vite build` | 0 错、build ✓（单 chunk 8.31 kB / gzip 3.76 kB） |
-| 产物真的能跑 | 产物塞进无头 Chrome `--dump-dom` | 列表/键控/片段/插槽/SVG spread/条件行/`disabled`/`select` 全对 |
-| `jsx.d.ts` 不是形同虚设 | 负向样例：错类型、缺必填 prop、把 JSX 赋给 `string` | 3 条预期的 `TS2322` |
-| `jsx` 必须 `preserve` | 改成 `react-jsx` 后 | `tsc` 报 `TS2875`；`vite build` **照样成功**（所以只能靠 tsc 拦） |
-| 缺 `jsx.d.ts` 就报错 | 拷目录用法：`include` 不覆盖它 | 每个标签 `TS7026` |
-| 拷目录时 `types` 字段不影响它 | `"types": []` + `include` 覆盖 `jsx.d.ts` | `tsc` 0 错（⚠ 这条量的是**拷目录**那种用法；装包用法正好相反 —— 靠 `types` 字段，见 §3.3） |
-| 路径 ② 可用 | 同源工程 + `jsxImportSource: "vue-jsx-vapor"`（软链到 vue 3.6.0-rc.9 / vue-jsx-vapor 3.2.25） | `tsc` 0 错、`--listFiles` 确认用到其 JSX 命名空间、build ✓。**⚠ 2026-09-29 的一次性读数**：Vue 依赖已从 mcloud 仓库删掉，本仓不再重跑 |
-| 路径 ② 不是碰巧 | 去掉 `jsxImportSource` 且不含 lite 声明 | 立刻 `TS7026`（同上，一次性读数） |
-| 裸名要配 alias/paths | 分别删掉 `resolve.alias` / tsconfig `paths` | `Rolldown failed to resolve import "lite"` / `TS2307` |
-| Vite 8 自己读 `paths` | 只留 tsconfig `paths`、删掉 `resolve.alias` | build ✓（旧版 Vite 没测，仍建议两处都配） |
-| TS 7 不能用 | 装 `typescript@7.0.2` | `vite build`：`TypeError: Cannot read properties of undefined (reading 'ESNext')`；`tsc`：110 条错 |
-
-**没验证 / 不在本文范围内的**：`vite dev` 的 HMR 与 `vite preview`；Vite 8 以外的 Vite 版本、
-以及其他构建工具（rollup / esbuild / webpack 插件）；SSR 与任何服务端渲染；
-框架自带的 `demo/` + `regress/` 那套断言脚本（要无头 Chrome，本文的样例是另写的最小工程）；
-`vue-jsx-vapor` 的宏（`@ts-macro/tsc`）路径。
+`vite dev` 的 HMR 与 `vite preview`；Vite 8 以外的 Vite 版本，以及其他构建工具
+（rollup / esbuild / webpack 插件）；SSR 与任何服务端渲染；框架自带的 `demo/` + `regress/`
+那套断言脚本（要无头 Chrome，本文的样例是另写的最小工程）。

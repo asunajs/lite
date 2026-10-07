@@ -22,7 +22,7 @@ mount(Counter, '#app') // 第二个参数也接元素：mount(Counter, document.
 | **没有** | 虚拟 DOM、`computed` / `reactive` / `nextTick`、`provide`/`inject`、Teleport / Transition / Suspense、异步组件、指令（`v-if` 那一族）、事件委托、模板引用（`ref=`） |
 
 它刻意**小**：语法子集由"真实项目里到底用了什么"普查决定，不含"以后可能用得上"的东西。
-范围与取舍见 [`docs/design.md`](docs/design.md)，踩坑史见 [`docs/postmortem.md`](docs/postmortem.md)。
+范围与取舍见 [`docs/design.md`](docs/design.md)，踩坑排查见 [`docs/pitfalls.md`](docs/pitfalls.md)。
 
 ## 安装
 
@@ -41,7 +41,7 @@ npm i -D @asunajs/lite oxc-parser
 ```jsonc
 // package.json
 "devDependencies": {
-  "@asunajs/lite": "git+https://github.com/asunajs/lite.git#v0.1.1",
+  "@asunajs/lite": "git+https://github.com/asunajs/lite.git#v0.1.2",
   "vite": "^8.3.0"
 }
 ```
@@ -77,7 +77,7 @@ export default defineConfig({
 
 | 入口 | 交出去的东西 | 为什么 |
 |---|---|---|
-| `@asunajs/lite` | **TS 源码**（`src/*.ts`） | 运行时必须由**你的**构建器编译：`src/dev.ts` 靠 `import.meta.env.DEV` 在你的构建里被静态替换（生产折掉诊断代码、开发保留）。在本仓先编译一遍，那句就变成字面量 `false` ⇒ 所有使用方的开发模式都失去诊断 |
+| `@asunajs/lite` | **TS 源码**（`src/*.ts`） | 运行时必须由**你的**构建器编译：`src/dev.ts` 靠 `import.meta.env.DEV` 在你的构建里被静态替换（生产折掉诊断代码、开发保留）。若在这里先编译一遍，那句就变成字面量 `false` ⇒ 所有使用者的开发模式都失去诊断 |
 | `@asunajs/lite/vite` | `dist/vite.js` + `.d.ts` | 它在 **Node** 里被 `vite.config.ts` import。Node 拒绝对 `node_modules` 下的文件做类型剥离（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`，实测）⇒ 必须交 JS |
 | `@asunajs/lite/compiler` | `dist/compiler.js` + `.d.ts` | 同上。给"想接 Vite 之外的打包器"的人直接调 `compile()` |
 | `@asunajs/lite/jsx` | `jsx.d.ts`（只有类型） | 全局 `JSX` 命名空间声明，零运行时代码 |
@@ -110,9 +110,9 @@ export default defineConfig({
 3. **状态惯例是模块级 `ref`。** "建一个只导出 ref 的模块，谁 import 谁用"就是这个框架的
    状态管理；要按实例隔离，就在组件体内 `ref()`（组件体只跑一次，正好一个实例一份）。
 
-完整教程（语法子集、坑、迁移步骤）见 [`docs/guide.md`](docs/guide.md)。
+完整教程（语法子集、坑、接入步骤）见 [`docs/guide.md`](docs/guide.md)。
 
-## 开发本仓
+## 开发
 
 ```bash
 npm ci
@@ -134,7 +134,7 @@ jsx.d.ts        全局 JSX 类型声明
 dist/           ./vite 与 ./compiler 的编译产物（入库，见上）
 demo/ bench/    真 DOM 验收 / 性能基准（框架自己的门）
 regress/        编译器负例与形态断言
-docs/           教程、设计取舍、踩坑史
+docs/           教程、设计取舍、踩坑排查
 ```
 
 ## 许可

@@ -1,40 +1,24 @@
 import { parseSync } from "oxc-parser";
 //#region ast.ts
 /**
-* AST 适配层：把 **oxc-parser** 的 ESTree 形状，适配成 lite 编译器要用的那一小撮接口。
+* AST 适配层：把 **oxc-parser** 的 ESTree 形状，适配成编译器要用的那一小撮接口
+* —— 本文件是唯一 import `oxc-parser` 的地方。
 *
-* # 为什么单独一层
+* 编译器的代码生成**完全不用解析器的 printer**（产物是自写的字符串拼接）⇒ 换解析器
+* **不改产物形状**，只改"怎么读源码"。编译器里只有一小撮代码碰 AST，且只做三类事：
+* "这是哪种节点" / "取字段" / "按位置切源码" —— 收进本文件后，换解析器只动这里加一次机械改名。
 *
-* `compiler.ts` 799 行里**只有 95 行碰 AST**，而且只做三类事：
-* "这是哪种节点" / "取字段" / "按位置切源码"。把这三类收进本文件后，
-* 换解析器就只动这里 + 一次机械改名（`ts.` → `ast.`）。
+* 做法是**一次 normalize 遍历**，把 TS 口径的别名与 `kind` 挂到节点上，而不是在编译器里
+* 逐处改写字段：oxc 的字段名与 TS 不同（`Literal.value` vs `.text` 等），且有一处**结构**
+* 差异 —— TS 把自闭合元素当独立节点，oxc 里它也是 `JSXElement`，靠 `openingElement.selfClosing` 区分。
 *
-* 关键事实（决定了这件事有多小）：**编译器的代码生成完全没用 TS 的 printer**
-* ——`createPrinter` / `printNode` / `getText` 在 `compiler.ts` 里命中数为 0，
-* 产物是自写的字符串拼接。所以换解析器**不改产物形状**，只改"怎么读源码"。
+* ⚠ 代价：别名是**拷贝**（同一个子节点被两个键指向）⇒ `forEachChild` 必须跳过别名键，
+* 否则同一节点被访问两次 —— `exprWithJsx` 靠它收集替换区间，重复访问会产出重复编辑。
+* 于是每个挂过别名的节点都记一份 `__alias` 名单。
 *
-* 2026-10-01：用户要求去掉 `typescript` 包（那一句"ts 就是为了编译"是对的：
-* 全仓只有 `compiler.ts` 一处 import 它）。本文件是**唯一** import `oxc-parser` 的地方。
-*
-* # 为什么是"归一化"而不是逐处改写字段
-*
-* oxc 的字段名与 TS 不同（`Literal.value` vs `.text`、`ConditionalExpression.consequent`
-* vs `.whenTrue`、`JSXOpeningElement.name` vs `.tagName`…），另有一处**结构**差异：
-* TS 把自闭合元素当作独立的 `JsxSelfClosingElement`，而 oxc 里它也是 `JSXElement`，
-* 靠 `openingElement.selfClosing` 区分。
-*
-* 与其在编译器里逐处改写（95 行会变成几百行 diff），这里做**一次 normalize 遍历**：
-* 把别名与 `kind` 直接挂到节点上，于是 `ts.` 改成 `ast.` 就能跑。
-*
-* ⚠ 代价：别名是**拷贝**（同一个子节点会被两个键指向），所以 `forEachChild` 必须跳过
-* 别名键，否则同一节点被访问两次 —— `compile()` 里的 `exprWithJsx` 正是靠
-* `forEachChild` 收集替换区间，重复访问会产出**重复编辑**（产物直接坏掉）。
-* 于是每个挂过别名的节点都记一份 `__alias` 名单，遍历时跳过。
-*
-* ⚠ 本层的类型是**宽松**的（`[key: string]: any`）：它要描述一棵来源不断变化的树，
-* 逐字段强类型只会让 95 行的移植变成 500 行的类型体操。行为不靠类型保证，靠两样东西：
-* `regress/compiler.mjs` 的 12 条负例，以及"18 个 tsx 的产物与 TS 版逐字节一致"
-* （黄金样本在移植时对过，见 `docs/design.md`）。
+* ⚠ 本层类型是**宽松**的（`[key: string]: any`）：逐字段强类型只会把移植变成类型体操。
+* 行为不靠类型保证，靠 `regress/compiler.mjs` 的负例，以及"18 个真实页面 tsx 的产物
+* 逐字节一致"这条黄金样本口径。
 */
 /** 编译器里仅有的三处 `SyntaxKind` 比较（字面量真假与 null）。 */
 var SyntaxKind = {
@@ -156,10 +140,9 @@ function apply(n) {
 		case "JSXExpressionContainer":
  /**
 		* ⚠ TS 对**空表达式容器**（`{/* 注释 *\/}`、`{}`、`{ }`）一律给 `expression === undefined`，
-		* 而 oxc 给一个 `JSXEmptyExpression` 节点 —— 实测三种写法都对过拍。
-		* 这个差别会**改产物**：编译器靠 `if (!child.expression) continue` 跳过它们，
-		* oxc 的节点是真值 ⇒ 会当成动态子节点多吐一个 `<!---->` 锚点（黄金样本就是这么抓出来的）。
-		* 所以这里镜像 TS 的口径。
+		* 而 oxc 给一个 `JSXEmptyExpression` 节点 —— 三种写法都对过拍。这个差别会**改产物**：
+		* 编译器靠 `if (!child.expression) continue` 跳过它们，oxc 的节点是真值 ⇒ 会当成动态子
+		* 节点多吐一个 `<!---->` 锚点（黄金样本抓出来的）。所以这里镜像 TS 的口径。
 		*/
 		if (n.expression?.type === "JSXEmptyExpression") n.expression = void 0;
 	}
@@ -219,76 +202,28 @@ var isParenthesizedExpression = (n) => n.type === "ParenthesizedExpression";
 //#endregion
 //#region compiler.ts
 /**
-* lite 的编译器：TSX → 目标形态。结构**参考 Solid 的 `babel-plugin-jsx-dom-expressions`**
-* （把它的真实输出调出来逐条对过，见 docs/design.md §4）。
+* lite 编译器：TSX → 模板串 + 逐槽 effect。结构参考 Solid 的 babel-plugin-jsx-dom-expressions。
 *
-* ```tsx
-* const Row = (props: { label: string; n: number }) => (
-*   <li class={props.n % 2 ? 'odd' : 'even'}>{props.label}:{props.n}</li>
-* )
-* ```
-* 编译成（就是 Solid 那套形状）：
-*
+* `<li class={p.n % 2 ? 'odd' : 'even'}>{p.label}:{p.n}</li>` 编译成：
 * ```js
 * const _t0 = template('<li>:')
-* const Row = (props) => (() => {
-*   const _n0 = _t0(), _n1 = _n0.childNodes[1]
-*   setNodes(_n0, () => props.label, _n1)   // 插在静态的 ":" 之前
-*   setNodes(_n0, () => props.n, null)      // 末尾 ⇒ 锚点 null
-*   effect(() => setClass(_n0, props.n % 2 ? 'odd' : 'even'))
-*   return _n0
-* })()
+* const _n0 = _t0(), _n1 = _n0.childNodes[1]
+* setNodes(_n0, () => p.label, _n1)          // 插在静态的 ":" 之前
+* setNodes(_n0, () => p.n, null)             // 末尾 ⇒ 锚点 null
+* effect(() => setClass(_n0, p.n % 2 ? 'odd' : 'even'))
 * ```
-*
-* 从 Solid 那里学到的四条（都是实打实省字节/省 DOM 操作的）：
-*
-* 1. **模板里折进静态 HTML**（`template()` + 克隆）—— 这部分照 Solid。
-*    ⚠ **锚点不是 Solid 那一套**：Solid 拿"后面那个静态兄弟"当锚点、末尾则 `null`；
-*    这里给**每个动态子节点各配一个 `<!---->` 占位注释**并拿它当锚点（见上面的产物）。
-*    理由是实测出来的坑（docs/postmortem.md §11.2 第 6 条）：两个相邻的动态子节点
-*    若都没有静态兄弟可当锚点，就都退化成"追加到末尾"，**顺序取决于谁的 effect 后跑** ——
-*    而其中一个的数据是异步来的 ⇒ 界面顺序随机。占位注释把位置钉死，重跑多少次都在同一处。
-*    ⚠ 也正因为锚点是**我们自己的节点引用**，它会被别处摘走 ⇒ `insert()` 里有护栏，
-*    见 docs/postmortem.md §12.3 / §12.5。
-* 2. **每个 JSX 表达式编译成一个立即执行的箭头函数** ⇒ 语句都待在自己的块里，
-*    编译器不必往宿主函数里插语句。
-* 3. **动态 prop 用 getter**（Solid 与 Vapor 在这里不同：Solid 用 getter、Vapor 用函数）。
-*    getter 的好处是运行期零魔法 —— 不用去猜"这个值是 prop 还是回调函数"。
-* 4. **条件分支不需要专门的原语**：`{c ? <A/> : null}` 就是
-*    `setNodes(parent, () => c ? A() : null, anchor)`。所以运行时里没有 `createIf`。
-*
-* 与 Solid 的**两处有意不同**：
-* * `.map()` 编译成键控的 `createFor`（Solid 的 `.map` 是朴素数组 diff，键控要写 `<For>`）；
-*   本项目的源码写的是 `.map` + `key=`。这里**不要求回调返回 JSX 字面量**：
-*   `(item) => navLink(item.id)`、带 `return` 的块体一样进 `createFor`（拿不到 `key`
-*   就退回索引键）。少了这一步，导航那一列每次切页都会整块重建，而它本来只需改 9 个 class。
-* * 事件不委托（Solid 用 `$$click` + `delegateEvents`）：见 docs §8，那是下一步的候选。
-*
-* ⚠ 只支持 `docs/design.md` §2 普查到的语法子集。**拦不拦分两类，别看错**（都是实测）：
-*
-* * **直接抛错**：指令式属性（`v-if` / `vIf` 这种形状）、`.map` 之外的 `key`、
-*   组件上的 spread、空元素带子节点、块体 map 拿不到返回值那类写法 —— 见
-*   `regress/compiler.mjs` 的 12 条负例；
-* * **静默编错**（不抛，产物是错的）：`class` 数组 / `class` 对象 / `style` 对象 /
-*   `ref=` / 小写 `onclick=`。例如 `class={[a,b]}` 原样进 `setClass` ⇒ `String(数组)`，
-*   而 `ref={el}` 变成 `setAttr(el, "ref", fn)`。
-*   ⚠ **这五条不检测**：全仓 0 处使用，加拦截等于为"不存在的需求"付字节，
-*   还会误伤同名的普通属性（`ref` 在 HTML 里本来就是合法属性名）。
-*   别指望类型检查兜住 —— jsx 属性是 `any`（`jsx.d.ts`）。
-*
-* ⚠⚠ **`key` 写在 `.map` 之外的位置也直接抛错。** 它是从 React/Vue 带来的肌肉记忆，
-* 而这里没有"按 key 决定复不复用"的那一次 diff —— `key` 只有一个消费者：`.map` 那一列的
-* `createFor`。写在别处（条件分支、普通元素）会被**静默丢掉**，于是攒出三层错位：
-* 代码里写着 `key`、注释解释"key 不能省"、界面上它其实什么都没做。
-* 编排页的步骤列表曾因此"点了不刷新"（docs/review/review-qwen3.8f-260929.md §1.2）。
-* 宁可编译不过，也别让人带着一个假的安全走动。
+* 1. 静态结构折进 `template()` 克隆；动态位置在模板里只留一个占位注释，路径由编译器算好。
+* 2. 每个 JSX 表达式编成一个立即执行的箭头函数 ⇒ 语句待在自己的块里，不必往宿主函数插语句。
+* 3. 动态 prop 用 getter（Solid 同款，Vapor 用函数）：运行期零魔法，不必猜值是 prop 还是回调。
+* 4. 与 Solid 有意不同：`.map()` 编成键控 `createFor`（不要求回调返回 JSX 字面量）；事件不委托
+*    （Solid 用 `$$click` + `delegateEvents`）。与 Vapor 的取舍见 docs/pitfalls.md「与 Vapor 的已知差异」。
+* 5. 占位注释就是锚点（为什么不能用"后面那个静态兄弟"，见 `dynChild`）；事件处理器自动包 `batch`。
+* ⚠ 只支持一个语法子集：哪些写法抛错、哪些会静默编错见 `checkDirective` / `claimKey` / `mapCallback`。
 */
 /**
-* 这些属性改 property 比改标签更对（布尔类）。
-*
-* ⚠ `value` **不在**这里：它走 `setValue`，因为 Vapor 的 `setValue` 是
-* **property 与 attribute 都写**（见 `dom.ts` 里那段注释），只写 property 的话
-* 只读展示框（`<input value={x} readonly>`）在 DOM 里看不到值。
+* 这些属性改 property 比改 attribute 更对（布尔类）。
+* ⚠ `value` **不在**这里：它走 `setValue`（property 与 attribute 都写，见 `src/dom.ts`），
+* 只写 property 的话只读展示框（`<input value={x} readonly>`）在 DOM 里看不到值。
 */
 var PROPS = /* @__PURE__ */ new Set([
 	"checked",
@@ -332,29 +267,19 @@ function foldLiteral(e) {
 	if (isNumericLiteral(e)) return e.text;
 }
 /**
-* JSX 文本的空白语义 —— **与 `vue-jsx-vapor` 的实际产物逐字符对齐**（不是照 Babel）。
+* JSX 文本的空白语义 —— 与 `vue-jsx-vapor` 的实际产物**逐字符对齐**（不是照 Babel）。
 *
-* 这两条是从**真实插件的输出**反推出来的，不是猜的：把各种形状的 JSX 过一遍
-* `vue-jsx-vapor/vite`，看它生成的 `template("…")` 字符串：
+* 拿各种形状的 JSX 过一遍 `vue-jsx-vapor/vite`，看它生成的 `template("…")` 字符串：
+* `\n    第一行\n    第二行\n  ` → `第一行\n    第二行`（行间换行与缩进原样保留）；
+* `a  <b>c</b>  d` → 原样不折叠；`\n  <b>x</b>\n  <i>y</i>\n` → `<b>x</b><i>y</i>`
+* （纯空白跨行整段丢掉）。⇒ 规则：
 *
-* | 源码文本 | Vue 生成 |
-* |---|---|
-* | `\n    第一行\n    第二行\n  ` | `第一行\n    第二行`（**行间换行与缩进原样保留**） |
-* | `\n    正文\n  ` | `正文` |
-* | `，\n    它们…\n  ` | `，\n    它们…` |
-* | `a  <b>c</b>  d`（单行） | `a  <b>c</b>  d`（**单行原样，不折叠**） |
-* | `  `（单行纯空白） | ` `（折叠成一个空格） |
-* | `\n    <b>x</b>\n    <i>y</i>\n  ` | `<b>x</b><i>y</i>`（纯空白跨行**整段丢掉**） |
+* 1. **整段纯空白**：不含换行 ⇒ 一个空格；含换行 ⇒ 整段丢掉；
+* 2. 否则**只裁"含换行的"首尾空白段** —— 不含换行的那点空格是行内空格，Vue 原样保留
+*    （`\n  耗时 {x}` 里 `耗时 ` 后面那个空格就属于这种）。
 *
-* ⇒ 规则：
-* 1. **整段纯空白**：不含换行 ⇒ 一个空格（Vue 把 `  ` 折成 ` `）；含换行 ⇒ 整段丢掉；
-* 2. 否则**只裁"含换行的"首尾空白段**：不含换行的那点空格是**行内空格**，Vue 原样保留
-*    （`\n  耗时 {x}` 里的 `耗时 ` 后面那个空格就属于这种 —— 一开始按 Babel 的算法
-*    把它 trim 掉了，才在这里露馅）。
-*
-* ⚠ 第一版按 Babel 的 `cleanJSXElementLiteralChild` 写（行间补空格、整体 trim），
-* 与 Vue 差一两个空格、甚至丢掉换行 —— 逐字符比对（当时用 `regress/compare.mjs`，
-* 该脚本已随拆桥删除）抓出来的。
+* ⚠ 按 Babel 的 `cleanJSXElementLiteralChild` 写（行间补空格、整体 trim）会差一两个空格、
+* 甚至丢掉换行 —— 只有逐字符比对才抓得出来。
 */
 function jsxText(raw) {
 	if (!/[^ \t\r\n]/.test(raw)) return raw.includes("\n") ? "" : " ";
@@ -365,6 +290,18 @@ function jsxText(raw) {
 	if (tail.includes("\n")) s = s.slice(0, s.length - tail.length);
 	return s;
 }
+/**
+* 语法子集的边界 —— **拦不拦分两类，别看错**：
+* * **直接抛错**：指令式属性（`v-if` / `vIf` 这种形状）、`.map` 之外的 `key`、
+*   组件上的 spread、空元素带子节点、块体 `.map` 拿不到返回值那类写法
+*   （`regress/compiler.mjs` 的负例逐条钉住）；
+* * **静默编错**（不抛，产物是错的）：`class` 数组 / `class` 对象 / `style` 对象 /
+*   `ref=` / 小写 `onclick=`。例如 `class={[a,b]}` 原样进 `setClass` ⇒ `String(数组)`。
+*
+* ⚠ 这五条不检测：加拦截等于为不存在的需求付字节，还会误伤同名的普通属性
+* （`ref` 在 HTML 里本来就是合法属性名）。类型检查也兜不住 —— JSX 属性是 `any`（`jsx.d.ts`）。
+* 设计与取舍见 docs/design.md。
+*/
 var Compiler = class {
 	sf;
 	src;
@@ -373,9 +310,8 @@ var Compiler = class {
 	templates = [];
 	/**
 	* 被 `.map()` 认领的 `key` 属性节点。
-	*
-	* 只有在这里登记过的才算数：登记发生在 `.map` 那条分支，消费发生在 `html()`/`component()`
-	* 走到那个元素时。没登记过的 `key` 一律抛错（见文件头 ⚠⚠ 那段）。
+	* 只有在这里登记过的才算数：登记在 `.map` 那条分支，消费在 `html()`/`component()` 走到那个
+	* 元素时；没登记过的 `key` 一律抛错（见 `claimKey`）。
 	*/
 	mapKeys = /* @__PURE__ */ new Set();
 	constructor(sf, src, runtime) {
@@ -389,27 +325,30 @@ var Compiler = class {
 		throw new Error(`[lite] ${at}${msg}`);
 	}
 	/**
-	* Vue 的模板指令在 JSX 里**不会报错，只会变成一个没人理的属性**：
-	* `v-if="ok"` 走静态属性那条路 ⇒ 条件根本没生效，而类型检查与构建全绿。
-	* 所以在认属性名的两个入口（组件 / 元素）各拦一次。
-	*
-	* ⚠ 只管 `vIf`（驼峰）与 `v-if`（连字符）——`@click` 那种带 `@` 的属性名 **TSX 本身就解析不过**，
-	* 由 `parseError` 拦。也**不带** `:xxx`：`xmlns:xlink` 那类带冒号的命名空间属性是真 SVG 属性，
-	* 而 `data-*` / `aria-*` 更不该管。
+	* Vue 的模板指令在 JSX 里**不会报错，只会变成一个没人理的属性**：`v-if="ok"` 走静态属性
+	* 那条路 ⇒ 条件根本没生效，而类型检查与构建全绿。所以在认属性名的两个入口各拦一次。
+	* ⚠ 只管 `vIf`（驼峰）与 `v-if`（连字符）——`@click` 那种带 `@` 的属性名 **TSX 本身就解析
+	* 不过**，由 `parseError` 拦；也**不带** `:xxx`：`xmlns:xlink` 那类命名空间属性是真 SVG
+	* 属性，`data-*` / `aria-*` 更不该管。
 	*/
 	checkDirective(attr, name) {
 		if (/^v[A-Z]/.test(name) || /^v-/.test(name)) this.fail(`不支持指令式属性：${name} —— 本框架没有模板指令。条件渲染写 \`cond ? <…/> : null\`，列表写 \`list.value.map(…)\`，事件写 \`onClick={…}\``, attr);
 	}
-	/** 处理 `key`：被 `.map` 认领过就放过（它不进 DOM），否则抛错。 */
+	/**
+	* 处理 `key`：被 `.map` 认领过就放过（它不进 DOM），否则抛错。
+	* ⚠⚠ `key` 写在 `.map` 之外的位置**必须抛错**：它是 React/Vue 的肌肉记忆，而这里没有
+	* "按 key 决定复不复用"的那一次 diff —— `key` 只有一个消费者：`.map()` 那一列的 `createFor`。
+	* 写在别处会被**静默丢掉**（代码里写着 key、注释解释"key 不能省"、界面上它什么都没做），
+	* 宁可编译不过，也别让人带着假的安全走动（见 docs/pitfalls.md「编译期"静默编错"的几种写法」）。
+	*/
 	claimKey(attr, name) {
 		if (name !== "key") return;
 		if (!this.mapKeys.delete(attr)) this.fail("这里的 `key` 什么都不做：它只对 `.map()` 返回的那个元素有意义（交给 createFor 当复用键）。条件分支/普通元素上请直接删掉 —— 本框架没有\"按 key 决定复不复用\"的那一次 diff，不会因为它换实例", attr);
 	}
 	/**
 	* 记下一个 helper，返回**生成代码里用的名字**（带 `_$` 前缀）。
-	*
-	* 前缀是必须的：业务文件自己也会 `import { batch } from 'lite'`（比如事件处理器里
-	* 手写 `batch(...)`），如果生成代码直接用 `batch`，那两行 import 就会撞名报
+	* 前缀是必须的：业务文件自己也会 `import { batch } from '@asunajs/lite'`（事件处理器里手写
+	* `batch(...)`）—— 生成代码若直接用 `batch`，两行 import 就会撞名报
 	* `Identifier 'batch' has already been declared`。所以生成代码用别名、import 也写别名。
 	*/
 	h(name) {
@@ -431,10 +370,9 @@ var Compiler = class {
 		return `(() => {\n${stmts.map((s) => "  " + s).join("\n")}\n  return ${value}\n})()`;
 	}
 	/**
-	* 与 `value` 相同，但**语句封在自己的块里**。
-	*
-	* 嵌套 JSX（组件插槽里的元素、列表项、条件分支）必须走这个入口：否则内层元素
-	* 生成的 `const _n0 = …` 会和外层撞名（实测报 `Identifier '_n0' has already been declared`）。
+	* 与 `value` 相同，但**语句封在自己的块里**：嵌套 JSX（组件插槽里的元素、列表项、条件分支）
+	* 必须走这个入口，否则内层元素生成的 `const _n0 = …` 会和外层撞名
+	* （`Identifier '_n0' has already been declared`）。
 	*/
 	valueIsolated(node) {
 		const local = [];
@@ -458,7 +396,7 @@ var Compiler = class {
 		const opening = isJsxElement(node) ? node.openingElement : node;
 		const props = [];
 		for (const attr of opening.attributes.properties) {
-			if (isJsxSpreadAttribute(attr)) throw new Error("组件上的 {...spread} 未支持（项目里没有这种写法）");
+			if (isJsxSpreadAttribute(attr)) throw new Error("组件上的 {...spread} 未支持");
 			const name = this.srcOf(attr.name);
 			this.checkDirective(attr, name);
 			this.claimKey(attr, name);
@@ -487,11 +425,9 @@ var Compiler = class {
 	}
 	/**
 	* 复制一段表达式的源码，但把它内部的 JSX 全部递归编译掉。
-	*
-	* ⚠ 少了这一步会**静默漏掉 JSX**：`<>…{cond ? null : <div>…</div>}…</>` 这种
-	* 片段成员、或数组字面量里的三元分支，走到"普通表达式"路径时若原样复制，
-	* 产物里就留着 JSX ⇒ 下游解析器直接报 `Unexpected JSX expression`
-	* （实测 app.tsx 的根返回就是这个形状）。
+	* ⚠ 少了这一步会**静默漏掉 JSX**：片段成员 `{cond ? null : <div>…</div>}`、或数组字面量里的
+	* 三元分支走到"普通表达式"路径时若原样复制，产物里就留着 JSX ⇒ 下游解析器直接报
+	* `Unexpected JSX expression`（应用的根返回就是这个形状）。
 	*/
 	exprWithJsx(node) {
 		const base = getStart(node);
@@ -540,8 +476,8 @@ var Compiler = class {
 		return rootVar;
 	}
 	/**
-	* 生成静态 HTML 与绑定表。动态位置**不产出任何节点** —— 插入时以"后面那个静态兄弟"
-	* 为锚点（Solid 的做法），所以 HTML 里不会多出占位节点。
+	* 生成静态 HTML 与绑定表：静态结构折进模板串，动态子节点只留一个 `<!---->` 占位注释当锚点
+	* （为什么必须留，见 `dynChild`）。
 	*/
 	html(node, stmts, base) {
 		const opening = isJsxElement(node) ? node.openingElement : node;
@@ -573,12 +509,11 @@ var Compiler = class {
 			}
 			if (isJsxExpression(init) && init.expression) {
 				/**
-				* 字符串/数字字面量**直接折进模板串**（Vapor 也这么做）：既少一次运行期写入，
-				* 又让属性顺序与 Vue 一致 —— 静态属性在模板里按源码顺序排，动态属性由 setter
-				* 在之后追加，`rows={3}` 折不折决定它排第 2 还是排最后（回归脚本能逐字符看出来）。
-				*
-				* ⚠ `false`/`null` 不折：布尔属性写进 HTML 是"存在即为真"，
-				* `disabled={false}` 折成 `disabled="false"` 会把它**打开**（语义反了）。
+				* 字符串/数字字面量**直接折进模板串**（Vapor 也这么做）：少一次运行期写入，且静态属性
+				* 按源码顺序排在模板里、动态属性由 setter 之后追加 —— `rows={3}` 折不折决定它排第 2
+				* 还是排最后（逐字符比对能看出来）。
+				* ⚠ `false`/`null` 不折：布尔属性写进 HTML 是"存在即为真"，`disabled={false}` 折成
+				* `disabled="false"` 会把它**打开**（语义反了）。
 				*/
 				const folded = foldLiteral(init.expression);
 				if (folded !== void 0) {
@@ -610,33 +545,25 @@ var Compiler = class {
 		const dyns = [];
 		/**
 		* `dom` 是**真正产出节点的下标** —— 路径 `childNodes[dom]` 用的是它。
-		*
-		* ⚠ 第一版把"动态槽"也当成一个序列位置去数，于是 `<li>{label}:{n}</li>` 里静态的 ":"
-		* 被标成 `childNodes[1]`（DOM 里它其实是 `childNodes[0]`）⇒ 锚点错位，渲染出 `:a1`。
+		* ⚠ 每个进 HTML 的东西都要占一个下标，**包括占位注释**（它确实是 DOM 里的一个节点）：
+		* 漏数任何一个，后面的静态节点就整体错位 ⇒ 锚点指到隔壁，渲染出 `:a1` 这种顺序。
 		*/
 		let dom = 0;
 		/**
-		* 上一个进模板的节点**是不是文本**。
-		*
-		* 相邻两段文本在 HTML 解析后**合成一个节点**，所以 `childNodes` 下标要按合并后的数：
-		* `<span>将结束{' '}<b>…</b></span>` 里两段文本只有一个文本节点，`<b>` 是
-		* `childNodes[1]`。按"每段文本各占一位"数就会算成 `[2]` —— 运行期拿一个文本节点
-		* 当父节点去 `insertBefore`，抛 `HierarchyRequestError: This node type does not
-		* support this method`（设置页的 `confirm-logout` 弹窗就是这么炸的）。
+		* 上一个进模板的节点**是不是文本**：相邻两段文本在 HTML 解析后**合成一个节点**，所以
+		* `childNodes` 下标要按合并后的数。`<span>将结束{' '}<b>…</b></span>` 里两段文本只有一个文本
+		* 节点，`<b>` 是 `childNodes[1]`；按"每段文本各占一位"数会算成 `[2]` ⇒ 运行期拿文本节点当父
+		* 节点去 `insertBefore`，抛 `HierarchyRequestError: This node type does not support this method`。
 		*/
 		let textTail = false;
 		/**
 		* 登记一个动态子节点：**它自己带一个 `<!---->` 占位注释**，这个注释就是它的锚点。
-		*
-		* ⚠⚠ 占位是**必须**的，不能靠"后面那个静态兄弟"当锚点（第一版就是那么做的）：
-		* 动态兄弟**后面还有动态兄弟**时，后者没有静态兄弟可指，两者的锚点都是 `null`
-		* （= 追加到末尾），于是最终顺序取决于**谁的 effect 后重跑**，而不是文档顺序 ——
-		* 抽屉页脚那两行（"最近执行 —" 与 "以 admin 的身份"）就是这么对调的：
-		* 一个先渲染、另一个晚一步（`backend` 是异步来的）后追加，跑到前面去了。
-		* 占位注释把这个槽的位置**钉死**，重跑多少次都插在同一个地方。
-		*
+		* ⚠⚠ 占位是**必须**的，不能靠"后面那个静态兄弟"当锚点：动态兄弟后面还有动态兄弟时，
+		* 后者没有静态兄弟可指，两者的锚点都是 `null`（= 追加到末尾），最终顺序就取决于
+		* **谁的 effect 后重跑**而不是文档顺序 —— 一个先渲染、另一个晚一步（数据异步）后追加，
+		* 就跑到前面去了。占位注释把槽的位置**钉死**（见 docs/pitfalls.md「锚点：动态子节点为什么会错位」）。
 		* 顺带解决文本合并：`<span>a{dyn}b</span>` 的两段文本被注释分开，不再是同一个节点。
-		* 抓 DOM 时本来就去注释（当时由 `regress/compare.mjs` 做，已删），所以不影响逐字符比对。
+		* ⚠ 锚点是**编译器自己持有的节点引用**，可能被别处摘走 ⇒ 运行期的 `insert()` 里有护栏。
 		*/
 		const dynChild = (binding) => {
 			parts.push("<!---->");
@@ -687,15 +614,12 @@ var Compiler = class {
 		const inner = parts.join("");
 		const open = `<${tag}${attrs.length ? " " + attrs.join(" ") : ""}>`;
 		/**
-		* ⚠⚠ **HTML 里没有"自闭合"这回事**（除了空元素）。
-		*
-		* JSX 允许把任意元素写成 `<label ... />`，但 `<label>` 不是空元素 —— 生成
-		* `<label ...>` 交给 HTML 解析器，它会把**后面的兄弟节点吞成 label 的子节点**。
-		* 后果不是"报错看得见"：编译期算好的 `childNodes[i]` 路径全部错位一格，
-		* 运行期在 effect 里抛 `Cannot read properties of undefined (reading 'firstChild')`，
-		* 而应用那边（`authState` 的写入）正好在 `try/catch` 里 ⇒ 错误被吞掉、
-		* 页面整个空白、`window.onerror` 一声不响。（`drawer-side` 里的
-		* `<label ... />` 就是这么把整个应用打黑的。）
+		* ⚠⚠ **HTML 里没有"自闭合"这回事**（除了空元素）：JSX 允许把任意元素写成 `<label ... />`，
+		* 但 `<label>` 不是空元素 —— 生成 `<label ...>` 交给 HTML 解析器，它会把**后面的兄弟节点
+		* 吞成 label 的子节点**。
+		* 后果不是"报错看得见"：编译期算好的 `childNodes[i]` 路径全部错位一格，运行期在 effect 里
+		* 抛 `Cannot read properties of undefined (reading 'firstChild')`；错误若被 `try/catch`
+		* 吞掉，表现成整页空白、`window.onerror` 一声不响。
 		*/
 		if (VOID.has(tag) && children.length) throw new Error(`lite 编译器不支持的写法：空元素 <${tag}> 不能带子节点（生成 HTML 无法表达）`);
 		const html = VOID.has(tag) ? open : `${open}${inner}</${tag}>`;
@@ -705,15 +629,11 @@ var Compiler = class {
 		}));
 		/**
 		* ⚠⚠ `<select>` 的 `value` 必须**等选项建出来之后再写**。
-		*
-		* `<select>` 没有"哪个选项被选中"的独立状态：`value` 是**在选项集合上算出来的**。
-		* 先写 `value=''`（没有任何选项匹配空串）时属性的值确实是 `''`，但随后插入 `<option>`
-		* 会触发浏览器的**自动选中**：Chrome 实测「反序插两个 option」的结果是**最后一个被选中**
-		* （`append(b); insertBefore(a, b)` ⇒ `value === 'b'`），于是下拉框自己跳到了别处。
-		*
-		* Vapor 也是这么排的 —— 任务页那个下拉框它生成的是
-		* `Z(t, () => r.value.map(…))`（先建选项）然后才 `R(() => H(e, i.value))`（再写值）。
-		* 交互回归（`regress/interact.mjs`）拿"切到任务页之后下拉框的 property"比出来的。
+		* `<select>` 没有"哪个选项被选中"的独立状态：`value` 是**在选项集合上算出来的**。先写
+		* `value=''`（没有选项匹配空串）时属性的值确实是 `''`，但随后插入 `<option>` 会触发浏览器
+		* 的**自动选中**：实测「反序插两个 option」的结果是**最后一个被选中**
+		* （`append(b); insertBefore(a, b)` ⇒ `value === 'b'`），下拉框自己跳到了别处。
+		* Vapor 也是这么排的：先生成"建选项"、再生成"写值"（拿切页之后下拉框的 property 比出来的）。
 		*/
 		const isValueAttr = (b) => b.kind === "attr" && b.name === "value";
 		const late = tag === "select" ? ownShifted.filter(isValueAttr) : [];
@@ -727,19 +647,14 @@ var Compiler = class {
 		};
 	}
 	/**
-	* 拆开 `.map()` 的回调：参数名 + **返回的那一行**。
-	*
-	* 只认**表达式体** `(x) => <Row …/>`。
-	*
-	* ⚠⚠ 块体（`xs.map((x) => { const a = …; return <Row/> })`）**故意不认**，走通用路径。
-	* 理由是响应式的边界，不是"懒得做"：列表行只在建那一行的时候跑一次回调，
-	* 而块体里 `return` 之前那几句（典型：`const active = page.value === id`）是在
-	* **任何 effect 之外**读信号的 —— 信号变了不会重跑它。列表源又是常量
-	* （`DOCK_IDS` 这种）时，那一行就**永久停在建出来那一刻的值**上。
+	* 拆开 `.map()` 的回调：参数名 + **返回的那一行**。只认**表达式体** `(x) => <Row …/>`。
+	* ⚠⚠ 块体（`xs.map((x) => { const a = …; return <Row/> })`）**故意不认**，走通用路径：
+	* 列表行只在建那一行时跑一次回调，块体里 `return` 之前那几句（典型 `const active =
+	* page.value === id`）是在**任何 effect 之外**读信号的 ⇒ 信号变了不会重跑它，列表源又是
+	* 常量数组时那一行就**永久停在建出来那一刻的值**上。
 	* 表达式体没这个问题：它的每个动态值都编译成绑定 effect，信号是**在 effect 里**读的。
-	*
-	* 其余形状（`xs.map(f).join(',')` 这种不返回 JSX 的、解构参数、参数多于两个）同样返回
-	* `undefined` ⇒ 走通用路径（整表重建，语义仍然对）。
+	* 其余形状（不返回 JSX 的 `.map`、解构参数、参数多于两个）同样返回 `undefined`
+	* ⇒ 走通用路径（整表重建，语义仍然对）。
 	*/
 	mapCallback(fn) {
 		if (!(isArrowFunction(fn) || isFunctionExpression(fn))) return void 0;
@@ -867,16 +782,11 @@ var Compiler = class {
 	}
 	finish(code) {
 		/**
-		* ⚠ 早退的判据**不能只看 `templates`**。
-		*
-		* `helpers` 里那些 `_$createComponent` / `_$setNodes` 是**代码里真的会调用**的
-		* （第 297 行那个组件分支就会发 `createComponent`），漏注入 import 的后果是
-		* 运行期 `ReferenceError: _$createComponent is not defined`，而**编译期一声不响**。
-		*
-		* 2026-10-02 实测踩中：`ui/account-picker.tsx` 改成"整份就是一个组件、
-		* 没有任何静态元素"之后 `templates.length === 0`，于是 import 被这行早退吞掉，
-		* 任务页整块渲染炸掉。判据补上 `helpers.size === 0` 即可 ——
-		* 两个都空时才是真的没什么要插。
+		* ⚠ 早退的判据**不能只看 `templates`**：`helpers` 里那些 `_$createComponent` / `_$setNodes`
+		* 是**代码里真的会调用**的（上面的组件分支就会发 `createComponent`），漏注入 import 的后果是
+		* 运行期 `ReferenceError: _$createComponent is not defined`，而**编译期一声不响** ——
+		* 一个组件、没有静态元素时 `templates.length === 0`，只判模板就会把 import 吞掉，
+		* 所以判据要连 `helpers.size === 0` 一起看。
 		*/
 		if (this.templates.length === 0 && this.helpers.size === 0) return {
 			code,
@@ -903,11 +813,9 @@ var isJsxNode = (n) => isJsxElement(n) || isJsxSelfClosingElement(n) || isJsxFra
 * 这一段代码里**读了**某个变量名吗（用来决定列表行是否"位置敏感"）。
 *
 * ⚠ 判定要**按结构走**，不能"整段源码里搜一下这个名字"：`a.i` 的那截 `i` 是成员名、
-* `<div i={…}>` 的 `i` 是属性名、`{ i: 1 }` 的 `i` 是键 —— 都不是读那个变量。
-*
-* 反过来漏判的代价不对称：多判一次只是重排时重建一行（丢一次 CSS 过渡），
-* 漏判则会把「第 3 步」这种步号留在旧位置上。所以除了上面那三处**明确不算**，
-* 其余一律算读了（包括嵌套箭头里 `() => move(i)`）。
+* `<div i={…}>` 的 `i` 是属性名、`{ i: 1 }` 的 `i` 是键 —— 都不是读那个变量。反过来漏判
+* 的代价不对称：多判一次只是重排时重建一行（丢一次 CSS 过渡），漏判则会把「第 3 步」这种
+* 步号留在旧位置上 ⇒ 除了上面那三处**明确不算**，其余一律算读了（含嵌套箭头 `() => move(i)`）。
 */
 function readsIdent(node, name) {
 	if (isIdentifier(node)) return node.text === name;
@@ -926,14 +834,12 @@ function literalHtml(e) {
 	if (isNullish(e) || e.kind === SyntaxKind.TrueKeyword || e.kind === SyntaxKind.FalseKeyword) return "";
 }
 /**
-* 只在**源码本来就有语法错误**时才会命中的分支：`createSourceFile` 不抛，它把诊断
-* 攒在 `parseDiagnostics` 里，节点树则是"就着残文能认多少认多少"。
-*
-* 为什么要单独判一句：不判的话 `compile` 会照常产出一段**残缺的**代码 —— 实测
-* `<div @click={f}>x</div>`（Vue 的事件简写，TSX 里非法）编出来是
-* `const A = () => (() => { … })() @click={f}>x</div>`，也就是把元素吃掉、把余下的
-* 原文当尾巴留下。下游转换器确实会报错，但那句 `Unexpected token` 与本文件
-* 隔着好几层，看着像编译器的 bug。先在这里拦，报的是"你这一行写错了"。
+* 只在**源码本来就有语法错误**时才会命中的分支：解析器不抛，它把诊断攒在 `errors` 里，
+* 节点树则是"就着残文能认多少认多少"。
+* 为什么要单独判一句：不判的话 `compile` 会照常产出一段**残缺的**代码 ——
+* `<div @click={f}>x</div>`（Vue 的事件简写，TSX 里非法）编出来是把元素吃掉、余下原文当尾巴
+* 留下。下游转换器确实会报错，但那句 `Unexpected token` 与本文件隔着好几层，看着像编译器的
+* bug；先在这里拦，报的是"你这一行写错了"。
 */
 var parseError = (sf) => {
 	const d = sf.errors[0];

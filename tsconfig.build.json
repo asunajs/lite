@@ -1,10 +1,10 @@
 {
   // 只用来**产出 `dist/` 的类型声明**（`scripts/build.mjs` 的第二步）。
   //
-  // 为什么类型要生成、而运行时不用：运行时是给**打包器**吃的 TS 源码（见 README §包结构），
+  // 为什么类型要生成、而运行时不用：运行时是给**打包器**吃的 TS 源码（见 README 的「包结构」一节），
   // 类型直接从 `src/index.ts` 走；而 `./vite`、`./compiler` 这两个入口必须交 **JS**
-  // —— Node 拒绝在 `node_modules` 下做类型剥离（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`，
-  // 2026-10-07 实测），所以它们要编译，编译了就得配一份 `.d.ts`。
+  // —— Node 拒绝在 `node_modules` 下做类型剥离（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`），
+  // 所以它们要编译，编译了就得配一份 `.d.ts`。
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,

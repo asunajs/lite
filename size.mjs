@@ -1,14 +1,9 @@
 /**
  * 量 lite 运行时自己的体积。
  *
- * 方法：把它当成一个库、用**与主产物完全相同的工具链**（Vite 8 / Rolldown / es2022 /
- * 默认压缩器）打一遍，再 gzip。
- *
- * 参照物（历史结论，来自 docs/architecture.md §10.6 的实测）：Vue Vapor 运行时地板
- * ≈ 43,656 B raw / 16,344 B gzip。本项目在 2026-09-30 把"为兼容 Vue 而留的壳"
- * （`createVaporApp` / `defineVaporComponent` / `renderEffect` / `computed` / `field` /
- * `createStore`）全删了 —— 那些是**普查里 0 处使用**的东西，删之前它们占的字节
- * 就在下面这张表的"全量"里。
+ * 方法：把它当成一个库、用**与真实产物完全相同的工具链**（Vite / Rolldown / es2022 /
+ * 默认压缩器）打一遍，再 gzip —— 量的必须是"消费方真正会下载到的那份"，
+ * 不是源码行数换算出来的估算。
  *
  * 用法：npm run size
  */
@@ -26,8 +21,7 @@ const tmp = path.join(dir, '.size-tmp')
  * 两档裁剪，说明"按需删模块"还能省多少。
  *
  * ⚠ 这里的导出清单必须与 `src/index.ts` **同步**：那份文件才是编译产物真正 import 的
- * 入口（上一版没同步，于是 `computed` 都删了还在量"含 computed 的全量"，
- * 报出来的数字与实际产物无关）。
+ * 入口。不同步的话，量出来的是"某个已经不存在的导出面"的体积，与实际产物无关 ✗。
  */
 const variants = {
   '全量（= src/index.ts 导出的全部）': `export * from '${src('index.ts')}'`,
@@ -57,10 +51,10 @@ for (const [name, code] of Object.entries(variants)) {
       rollupOptions: { output: { minify: true } },
     },
   })
-  // ⚠ 匹配 `.js` **和** `.mjs`：产物扩展名由构建器决定，Vite 8/Rolldown 现在吐
-  // `lite.mjs`。只写 `.endsWith('.js')` 时 `find` 返回 `undefined`，下一行
-  // `path.join(undefined)` 直接 `ERR_INVALID_ARG_TYPE` —— 症状是"量体积的脚本崩了"，
-  // 看着像体积出了问题，其实只是没找到文件（2026-09-30 实测踩到）。
+  // ⚠ 匹配 `.js` **和** `.mjs`：产物扩展名由构建器决定（现在吐 `lite.mjs`）。
+  // 只写 `.endsWith('.js')` 时 `find` 返回 `undefined`，下一行 `path.join(undefined)`
+  // 直接 `ERR_INVALID_ARG_TYPE` —— 症状是"量体积的脚本崩了"，看着像体积出了问题，
+  // 其实只是没找到文件。
   const built = fs.readdirSync(out).find((f) => f.endsWith('.js') || f.endsWith('.mjs'))
   if (!built) throw new Error(`构建没有产出 js/mjs：${out} 里只有 ${fs.readdirSync(out).join(', ')}`)
   const file = path.join(out, built)
@@ -69,7 +63,7 @@ for (const [name, code] of Object.entries(variants)) {
 }
 
 const pad = (s, n) => s + ' '.repeat(Math.max(0, n - [...s].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 2 : 1), 0)))
-console.log('lite 运行时（生产构建 + gzip；参照：Vue Vapor 地板 ≈ 16,344 B gzip，Solid runtime ≈ 7 KB）\n')
+console.log('lite 运行时（生产构建 + gzip；对照：Vue Vapor 运行时地板 ≈ 16 KB gzip，Solid 运行时 ≈ 7 KB）\n')
 console.log(pad('裁剪', 40) + 'raw'.padStart(9) + 'gzip'.padStart(9) + '  对比 Solid 的 7KB')
 let min = Infinity
 for (const [name, raw, gz] of rows) {

@@ -2,8 +2,8 @@
  * lite 的 JSX 类型声明 —— **只有类型，零运行时代码**。
  *
  * 为什么要有这个文件：lite 的编译器（`compiler.ts`）把 TSX 折成运行时调用，但**类型检查**
- * 是 tsc 的事，tsc 只认 JSX 命名空间、不认 lite 的编译器。没有它，`tsc --noEmit` 会对每个
- * 标签报：
+ * 是 TypeScript 编译器的事，它只认 JSX 命名空间、不认 lite 的编译器。没有它，`--noEmit`
+ * 会对每个标签报：
  *
  * ```
  * error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
@@ -14,13 +14,13 @@
  * `style` 只接字符串、`false`/`null` 在部分属性上有特殊语义……），用类型去假装能校验它
  * 只会造出一堆假错误。
  *
- * 三条使用前提（见 `docs/guide.md` §3）：
+ * 三条使用前提（细节见 `docs/guide.md`）：
  * 1. `"jsx": "preserve"` —— 否则 tsc 按该设置去找 JSX 运行时（例如 `react-jsx` 会直接报
  *    `TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist`）；
  * 2. 这个文件靠 tsconfig 的 `include` / `files` 进类型程序（`types` 字段与它无关，
  *    写 `"types": []` 也照样生效）；
- * 3. 不要另外写 `"jsxImportSource"`：那条路是给存量 `vue-jsx-vapor` 项目用的（二选一；
- *    两个同时存在也不报错，但这份声明就用不上了）。
+ * 3. 不要另外写 `"jsxImportSource"`：那条路会让 TS 去加载**别的** JSX 运行时（两者同时存在
+ *    也不报错，但这份声明就用不上了）。
  */
 
 declare namespace JSX {
@@ -65,8 +65,9 @@ declare namespace JSX {
   }
 
   /**
-   * 所有标签都接受的通用属性。lite 只有 `key`，而且**只对 `.map()` 有意义**
-   * （写在其它的元素/组件上会被编译器静默丢掉，见 `docs/guide.md` §6）。
+   * 所有标签都接受的通用属性。lite 只有 `key`，而且**只对 `.map()` 有意义**：
+   * 写在其它元素/组件上会被编译器**静默丢掉**（见 docs/pitfalls.md
+   * 「编译期"静默编错"的几种写法」）。
    */
   interface IntrinsicAttributes {
     key?: string | number | bigint | null | undefined
