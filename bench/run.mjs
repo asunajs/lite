@@ -5,7 +5,7 @@
  * （挂载 1000 行 > 500ms —— 那通常意味着某处从"搬节点"退化成"重建整表"，
  * 与其说是慢，不如说是回归）。
  *
- * 用法：`node lite/bench/run.mjs`
+ * 用法：`npm run test:bench`
  */
 import { execFileSync, spawn } from 'node:child_process'
 // ⚠ 无头 chrome 的公共参数（含可选的 --no-sandbox）只有一份来源，见该文件头

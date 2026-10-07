@@ -6,13 +6,13 @@
  * —— 于是诊断代码（长文案 + `new Error().stack` 抓栈）**不进生产产物**，
  * 但在 `vite dev` 里一条不少。
  *
- * 实测（2026-09-30，`node lite/size.mjs`）：这条值 **gzip −337 B**（2,808 → 2,471，约 −12%）。
+ * 实测（2026-09-30，`npm run size`）：这条值 **gzip −337 B**（2,808 → 2,471，约 −12%）。
  *
  * ⚠ 不要改成 `globalThis.__DEV__` 之类的**运行时**值：那样压缩器折不掉分支，
  * 字符串会照旧留在产物里 —— 只有执行路径被跳过，体积一分不省。
  *
- * ⚠ 各构建入口（`web/vite.config.ts`、`lite/demo`、`lite/bench`、`lite/regress`、
- * `lite/size.mjs`）都走 Vite，所以 `import.meta.env` 一定有。将来若有人用
- * 裸 esbuild/rolldown 直接打 `lite/src`，必须自己 `define` 它。
+ * ⚠ 消费方的各构建入口（`vite.config.ts`、本仓的 `demo/`、`bench/`、`regress/`、
+ * `size.mjs`）都走 Vite，所以 `import.meta.env` 一定有。将来若有人用
+ * 裸 esbuild/rolldown 直接打 `src/`，必须自己 `define` 它。
  */
 export const DEV: boolean = import.meta.env.DEV

@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const dir = path.dirname(new URL(import.meta.url).pathname)
-execFileSync('npx', ['vite', 'build', '--config', path.join(dir, 'vite.config.ts')], { cwd: path.join(dir, '../..'), stdio: 'pipe' })
+execFileSync('npx', ['vite', 'build', '--config', path.join(dir, 'vite.config.ts')], { cwd: path.join(dir, '..'), stdio: 'pipe' })
 
 const js = fs.readFileSync('/tmp/lite-demo/demo.mjs', 'utf8')
 fs.writeFileSync('/tmp/lite-demo.compiled.js', js)

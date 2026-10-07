@@ -7,9 +7,9 @@
  * 负例是唯一能把它钉住的东西。
  *
  * 为什么在 Node 里跑而不是在浏览器里：`compile()` 是纯函数（源码进、字符串出），
- * 判据全在返回值与抛错上，不需要真 DOM（那是 `lite/demo/run.mjs` 的活）。
+ * 判据全在返回值与抛错上，不需要真 DOM（那是 `demo/run.mjs` 的活）。
  *
- * 用法：`node lite/regress/compiler.mjs`（退出码非 0 = 有负例没按预期抛错）
+ * 用法：`npm run test:compiler`（退出码非 0 = 有负例没按预期抛错）
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -17,7 +17,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const dir = path.dirname(new URL(import.meta.url).pathname)
-const web = path.join(dir, '../..')
+const root = path.join(dir, '..')
 const tmp = path.join(dir, '.check-tmp')
 
 /**
@@ -111,11 +111,11 @@ fs.mkdirSync(tmp, { recursive: true })
 fs.writeFileSync(
   path.join(tmp, 'entry.ts'),
   // vite 的 lib 入口不能是仓库外的虚拟模块，那就写一个一行的转发。
-  // ⚠ 本脚本的临时目录是 `lite/regress/.check-tmp`，所以 `../../` 才回到 `lite/`
+  // ⚠ 本脚本的临时目录是 `regress/.check-tmp`，所以 `../../` 才回到仓库根
   `export { compile } from '../../compiler.ts'\n`,
 )
 try {
-  execFileSync('npx', ['vite', 'build', '--config', path.join(dir, 'check.vite.config.ts')], { cwd: web, stdio: 'pipe', encoding: 'utf8' })
+  execFileSync('npx', ['vite', 'build', '--config', path.join(dir, 'check.vite.config.ts')], { cwd: root, stdio: 'pipe', encoding: 'utf8' })
 } catch (e) {
   // 打纯文本：execFileSync 默认把 stdout/stderr 当 Buffer 印出来，几百行十六进制，
   // 真正那一句（UNRESOLVED_ENTRY 之类）反而被埋在下面
@@ -126,7 +126,7 @@ try {
 const outDir = path.join(tmp, 'out')
 const outFile = fs.existsSync(outDir) ? path.join(outDir, fs.readdirSync(outDir).find((f) => f.endsWith('.js')) ?? 'compiler.js') : ''
 if (!outFile || !fs.existsSync(outFile)) {
-  console.log('✗ 没打出临时产物（' + outDir + '）—— 检查 lite/regress/check.vite.config.ts')
+  console.log('✗ 没打出临时产物（' + outDir + '）—— 检查 regress/check.vite.config.ts')
   process.exit(1)
 }
 const { compile } = await import(pathToFileURL(outFile).href)

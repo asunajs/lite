@@ -1,0 +1,18 @@
+# 依赖与构建产物
+node_modules/
+
+# 自检脚本的临时目录（脚本结尾都会自己删，抛错在半路就留残骸）
+regress/.check-tmp/
+.size-tmp/
+
+# 日志与临时页面
+*.log
+npm-debug.log*
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+
+# ⚠ `dist/` **故意不忽略**：它入库，是 git 依赖能直接用的前提，
+# 漂移由 CI 的「dist 与源码同步」一步兜住（见 scripts/build.mjs 文件头）。

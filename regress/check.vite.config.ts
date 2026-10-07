@@ -1,5 +1,5 @@
 /**
- * `regress/compiler.mjs` 的临时构建配置：把 `lite/compiler.ts` 打成一个
+ * `regress/compiler.mjs` 的临时构建配置：把仓库根的 `compiler.ts` 打成一个
  * **Node 能直接 import 的 ESM**，好在脚本里跑编译期负例。
  *
  * 为什么这么绕：`compiler.ts` 是 TS，而 Node 的类型剥离开关
@@ -10,8 +10,8 @@
  * 打进去也没有意义 —— 与闸门要证明的东西毫无关系。
  * （2026-10-01 之前这里 external 的是 `typescript`，编译器换解析器时一起换了。）
  *
- * ⚠ 路径一律绝对：本文件与临时目录都在 `lite/regress/` 下（`.check-tmp`），而
- * Vite 把相对 `outDir` 当成相对 **root**（= `web/`），不写绝对就会落错地方 ——
+ * ⚠ 路径一律绝对：本文件与临时目录都在 `regress/` 下（`.check-tmp`），而
+ * Vite 把相对 `outDir` 当成相对 **root**（= 仓库根），不写绝对就会落错地方 ——
  * 写错一次就是 `UNRESOLVED_ENTRY`（踩过）。
  */
 import path from 'node:path'

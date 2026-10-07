@@ -10,7 +10,7 @@
  * `createStore`）全删了 —— 那些是**普查里 0 处使用**的东西，删之前它们占的字节
  * 就在下面这张表的"全量"里。
  *
- * 用法：node lite/size.mjs
+ * 用法：npm run size
  */
 
 import fs from 'node:fs'

@@ -14,7 +14,7 @@
  * 这里刻意**只有 4 个 API**（ref / effect / batch / watch）—— 普查显示全项目就用了这些：
  * `ref` 66 处、`watch` 1 处、`computed` **0 处**、`reactive` 0 处、`nextTick` 0 处。
  * ⇒ `computed` 与 `field`/`createStore` 那一族（0 处使用）在 2026-09-30 随"不必兼容 Vue"
- * 一起删了，省下多少字节由 `node lite/size.mjs` 量（它保留着"全量 vs 裁剪后"两档口径）。
+ * 一起删了，省下多少字节由 `npm run size` 量（它保留着"全量 vs 裁剪后"两档口径）。
  * 要加回来的话它是**独立的一段**（派生值 = 一条订阅 fn 的 effect + 一个 RefImpl 输出），
  * 运行时其余部分一行都不用改。
  *

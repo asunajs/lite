@@ -1,15 +1,15 @@
 /**
  * 打 bench 页：编译 `bench.tsx` → 拼一个自包含页面落 /tmp（不进仓库产物）。
  *
- * 拆成"build 写页 / run 抓结果"两半，与 `lite/demo/` 同构：
- * 只想看页面时 `node lite/bench/build.mjs`，要数就 `node lite/bench/run.mjs`。
+ * 拆成"build 写页 / run 抓结果"两半，与 `demo/` 同构：
+ * 只想看页面时 `node bench/build.mjs`，要数就 `npm run test:bench`。
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
 const dir = path.dirname(new URL(import.meta.url).pathname)
-execFileSync('npx', ['vite', 'build', '--config', path.join(dir, 'vite.config.ts')], { cwd: path.join(dir, '../..'), stdio: 'pipe' })
+execFileSync('npx', ['vite', 'build', '--config', path.join(dir, 'vite.config.ts')], { cwd: path.join(dir, '..'), stdio: 'pipe' })
 
 const js = fs.readFileSync('/tmp/lite-bench/bench.mjs', 'utf8')
 

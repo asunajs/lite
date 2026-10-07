@@ -6,7 +6,7 @@
  * 该脚本记下来的那三个抓取坑（原记在迁移期的 `regress/compare.mjs` 里，
  * 那个脚本 2026-09-30 随 Vue 兼容层一起删了）。这里把"抓"这件事收在一处。
  *
- * 用法：`node lite/demo/run.mjs`（退出码非 0 = 有断言失败）
+ * 用法：`npm run test:demo`（退出码非 0 = 有断言失败）
  */
 import { execFileSync, spawn } from 'node:child_process'
 // ⚠ 无头 chrome 的公共参数（含可选的 --no-sandbox）只有一份来源，见该文件头

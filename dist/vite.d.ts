@@ -18,28 +18,17 @@
  * plugins: [lite({ runtime: '@asunajs/lite' })]
  * ```
  */
-
-import { compile } from './compiler.ts'
-
 export interface LiteOptions {
-  /** 生成代码里运行时从哪 import（相对**每个源文件**，或包名）。 */
-  runtime?: string
-  /** 处理哪些文件，默认 `.tsx`。 */
-  include?: RegExp
+    /** 生成代码里运行时从哪 import（相对**每个源文件**，或包名）。 */
+    runtime?: string;
+    /** 处理哪些文件，默认 `.tsx`。 */
+    include?: RegExp;
 }
-
-export default function lite(options: LiteOptions = {}) {
-  // ⚠ 默认值就是**包名**：本仓拆成独立包之后，裸名 `'lite'` 在消费方那里解析不到
-  // （除非他自己配 alias）—— 一个不传参数的 `lite()` 必须开箱能用。
-  const runtime = options.runtime ?? '@asunajs/lite'
-  const include = options.include ?? /\.tsx$/
-  return {
-    name: 'lite',
-    enforce: 'pre' as const,
-    transform(code: string, id: string) {
-      if (!include.test(id) || id.includes('node_modules')) return
-      const { code: out } = compile(code, { runtime, filename: id })
-      return { code: out, map: null }
-    },
-  }
-}
+export default function lite(options?: LiteOptions): {
+    name: string;
+    enforce: 'pre';
+    transform(code: string, id: string): {
+        code: string;
+        map: null;
+    } | undefined;
+};

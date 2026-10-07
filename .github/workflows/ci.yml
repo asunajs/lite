@@ -1,0 +1,67 @@
+# 门禁分两个 job，分界口径是**要不要浏览器**（不是"重要不重要"）。
+#
+# * `gates`：类型 + 构建 + 编译器负例 + **产物与源码同步** —— 纯 Node，跑得飞快，
+#   而且它覆盖的正好是"改完必须自己跑一遍"的那几条。
+# * `browser-gates`：真 DOM 验收（`demo/`）与编译产物行为/耗时护栏（`bench/`）——
+#   这两条只有真浏览器能回答，所以单独一个 job、自己装无头 Chrome。
+#
+# ⚠ 无头 Chrome 的路径口径：本仓的 `demo/run.mjs` / `bench/run.mjs` 从
+# `~/.cache/puppeteer/chrome-headless-shell/*/chrome-headless-shell-*/chrome-headless-shell`
+# 里找它 —— 那正是 `@puppeteer/browsers` 的默认落点，所以下面那条安装命令够了，
+# **不需要**把 puppeteer 加进 devDependencies。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # typecheck → build → 编译器负例
+      - run: npm run gates
+
+      # `dist/` 入库（git 依赖要能直接用），所以**必须**钉住"产物与源码一致"。
+      # 忘了 `npm run build` 就提交源码时，这一条会红在这里，而不是等到消费方那边。
+      - name: dist 与源码同步
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo '✗ dist/ 与源码不一致 —— 本地跑 `npm run build` 后把 dist/ 一起提交'
+            git diff --stat -- dist
+            exit 1
+          fi
+          echo '✓ dist/ 与源码一致'
+
+  browser-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # 装到 ~/.cache/puppeteer（脚本按这个落点找）
+      - name: 装无头 Chrome
+        run: npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path "$HOME/.cache/puppeteer"
+
+      - name: 真 DOM 验收（demo）
+        run: npm run test:demo
+
+      - name: 编译产物行为 + 耗时护栏（bench）
+        run: npm run test:bench

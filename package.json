@@ -1,0 +1,80 @@
+{
+  "name": "@asunajs/lite",
+  "version": "0.1.0",
+  "description": "无虚拟 DOM + 编译期绑定的 TSX 前端框架：零依赖运行时 + Vite 插件（TSX 折成模板串与逐槽 effect）",
+  "keywords": [
+    "tsx",
+    "jsx",
+    "vite",
+    "vite-plugin",
+    "fine-grained",
+    "no-virtual-dom",
+    "frontend-framework"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asunajs/lite.git"
+  },
+  "homepage": "https://github.com/asunajs/lite#readme",
+  "bugs": {
+    "url": "https://github.com/asunajs/lite/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "default": "./dist/vite.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler.d.ts",
+      "default": "./dist/compiler.js"
+    },
+    "./jsx": {
+      "types": "./jsx.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "dist",
+    "jsx.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "dependencies": {
+    "oxc-parser": "^0.152.0"
+  },
+  "peerDependencies": {
+    "vite": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "oxc-parser": "^0.152.0",
+    "vite": "^8.3.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsgo --noEmit",
+    "test:compiler": "node regress/compiler.mjs",
+    "test:demo": "node demo/run.mjs",
+    "test:bench": "node bench/run.mjs",
+    "gates": "npm run typecheck && npm run build && npm run test:compiler",
+    "size": "node size.mjs",
+    "prepack": "node scripts/build.mjs"
+  }
+}
