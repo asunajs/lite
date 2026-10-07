@@ -1,14 +1,12 @@
-# 门禁分两个 job，分界口径是**要不要浏览器**（不是"重要不重要"）。
+# CI 只跑**不需要浏览器**的那几条：类型 + 构建 + 编译器负例 + 产物与源码同步。
 #
-# * `gates`：类型 + 构建 + 编译器负例 + **产物与源码同步** —— 纯 Node，跑得飞快，
-#   而且它覆盖的正好是"改完必须自己跑一遍"的那几条。
-# * `browser-gates`：真 DOM 验收（`demo/`）与编译产物行为/耗时护栏（`bench/`）——
-#   这两条只有真浏览器能回答，所以单独一个 job、自己装无头 Chrome。
+# ⚠ 真 DOM 验收（`test:demo`）与 bench（`test:bench`）**故意不进 CI**：它们要装一份无头
+# Chrome（几十 MB、还挑机器），而它们回答的问题（"这份产物在真 DOM 上对不对"）在改框架的
+# 人手上跑一次更直接：
 #
-# ⚠ 无头 Chrome 的路径口径：`demo/run.mjs` / `bench/run.mjs` 从
-# `~/.cache/puppeteer/chrome-headless-shell/*/chrome-headless-shell-*/chrome-headless-shell`
-# 里找它 —— 那正是 `@puppeteer/browsers` 的默认落点，所以下面那条安装命令够了，
-# **不需要**把 puppeteer 加进 devDependencies。
+#   LITE_CHROME_NO_SANDBOX=1 npm run test:demo && npm run test:bench
+#
+# 没装浏览器的机器上这两条**会直接失败**（不印"跳过"、更不会冒充绿）⇒ 谁改谁跑。
 name: CI
 
 on:
@@ -43,25 +41,3 @@ jobs:
             exit 1
           fi
           echo '✓ dist/ 与源码一致'
-
-  browser-gates:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
-
-      # 装到 ~/.cache/puppeteer（脚本按这个落点找）
-      - name: 装无头 Chrome
-        run: npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path "$HOME/.cache/puppeteer"
-
-      - name: 真 DOM 验收（demo）
-        run: npm run test:demo
-
-      - name: 编译产物行为 + 耗时护栏（bench）
-        run: npm run test:bench

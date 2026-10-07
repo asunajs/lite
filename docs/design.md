@@ -333,9 +333,16 @@ demo 与 bench 看各自最后那行输出。
 
 ⚠ 没装无头 Chrome 的机器上 `test:demo` / `test:bench` **会直接失败**（脚本按
 `~/.cache/puppeteer` 的落点找 `chrome-headless-shell`，找不到就 spawn 不出来）——
-它不会印"跳过"、更不会冒充绿。CI（`.github/workflows/ci.yml`）因此分两个 job：
-`gates` 跑 `npm run gates` 加一条"`dist` 与源码同步"的检查（纯 Node，快），
-`browser-gates` 自己装无头 Chrome 再跑 `test:demo` / `test:bench`。
+它不会印"跳过"、更不会冒充绿。
+
+⚠ **这两条故意不进 CI**（`.github/workflows/ci.yml` 只有一个 `gates` job：`npm run gates`
++ 一条"`dist` 与源码同步"的检查，纯 Node、跑得飞快）。要装浏览器就得在 CI 里拉一份
+几十 MB 的 Chrome、还挑机器，而它们回答的问题（"这份产物在真 DOM 上对不对"）
+**谁改框架谁跑一次**更直接：
+
+```bash
+LITE_CHROME_NO_SANDBOX=1 npm run test:demo && npm run test:bench
+```
 
 ⚠ **无头 Chrome 的启动参数只有一份：`chrome-flags.mjs`** —— `demo/run.mjs` 与
 `bench/run.mjs` 都从 `headlessFlags()` 取公共前缀（`--headless` [+ `--no-sandbox`]
