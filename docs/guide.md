@@ -10,7 +10,8 @@ TSX 由一个小插件在编译期折成运行时调用，之后只有"读过某
 
 框架本身的**设计取舍与踩坑史**不在本文，见 [`design.md`](design.md)（那篇是给要改框架的人看的）。
 
-**先说结论（首选）**：`npm i -D @asunajs/lite`（或 git 依赖 `github:asunajs/lite#v0.1.0`）→
+**先说结论（首选）**：`npm i -D @asunajs/lite`（或 git 依赖 `git+https://github.com/asunajs/lite.git#v0.1.1`
+—— ⚠ 别用 `github:` 简写，npm 把它解析成 `git+ssh://`，公开仓也要密钥 ⇒ CI 装不上）→
 `import lite from '@asunajs/lite/vite'` 接插件 → tsconfig 里用 `@asunajs/lite/jsx` 拿全局 JSX 类型。
 **全程不需要 Vue**（本文第 4 节里每个结论都有跑过的命令）。
 

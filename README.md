@@ -34,12 +34,14 @@ npm i -D @asunajs/lite oxc-parser
 写成上面这样只是让"构建期到底要什么"一眼可见。类型检查另需一个 TypeScript 实现
 （`typescript@5` 的 `tsc --noEmit`，或原生的 `tsgo --noEmit`）。
 
-当前尚未发布到 npm registry，用 git 依赖即可（版本号即 tag）：
+当前尚未发布到 npm registry，用 git 依赖即可（版本号即 tag）。
+⚠ 写**完整的 `git+https://`**，别用 `github:owner/repo` 简写 —— npm 会把那个简写解析成
+`git+ssh://`，而 SSH 对**公开仓**也要密钥 ⇒ CI 与"没有配 SSH 的人"一律装不上 ✗（实测）。
 
 ```jsonc
 // package.json
 "devDependencies": {
-  "@asunajs/lite": "github:asunajs/lite#v0.1.0",
+  "@asunajs/lite": "git+https://github.com/asunajs/lite.git#v0.1.1",
   "vite": "^8.3.0"
 }
 ```
