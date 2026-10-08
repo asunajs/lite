@@ -11,7 +11,8 @@ const Counter = () => {
   return <button onClick={() => n.value++}>点了 {n.value} 次</button>
 }
 
-mount(Counter, '#app') // 第二个参数也接元素：mount(Counter, document.body)
+const unmount = mount(Counter, '#app') // 第二个参数也接元素：mount(Counter, document.body)
+// unmount() 会跑 onUnmounted，并把这一棵摘干净
 ```
 
 | | |
@@ -22,6 +23,7 @@ mount(Counter, '#app') // 第二个参数也接元素：mount(Counter, document.
 | **没有** | 虚拟 DOM、`computed` / `reactive` / `nextTick`、`provide`/`inject`、Teleport / Transition / Suspense、异步组件、指令（`v-if` 那一族）、事件委托、模板引用（`ref=`） |
 
 它刻意**小**：语法子集由"真实项目里到底用了什么"普查决定，不含"以后可能用得上"的东西。
+**一屏契约**（给 agent 与赶时间的人）见 [`docs/agent.md`](docs/agent.md)；
 范围与取舍见 [`docs/design.md`](docs/design.md)，踩坑排查见 [`docs/pitfalls.md`](docs/pitfalls.md)。
 
 ## 安装
@@ -112,6 +114,21 @@ export default defineConfig({
 
 完整教程（语法子集、坑、接入步骤）见 [`docs/guide.md`](docs/guide.md)。
 
+## 适合 / 不适合
+
+| 适合 | 不适合 |
+|---|---|
+| 单页应用，或页面里那几块复杂交互 | 需要 **SSR / 水合** —— 这里是真 DOM，**没有** |
+| 对首屏与包体积敏感（运行时是一块**每个用户都要下载**的地板） | 需要路由 / 全局 store / 组件库 —— 刻意不做，得自己接 |
+| 工程里**已经有打包器**（Vite 或任何能编译 TS 的） | 想要"贴个 `<script>` 就能跑" —— 运行时是 TS 源码，必须过打包器 |
+| 接受"语法子集窄、没有生态"，换来运行时小与行为可预测 | 团队不接受"**组件体只跑一次**"这个心智模型 |
+
+**为什么不提供"免构建"那条路**：这个框架的整个前提就是"JSX 在**构建期**被折掉" ——
+折掉之后运行期不解析模板、不做 diff、也不 `eval`（所以**严格 CSP 下可用**）。
+代价就是必须有构建步骤；反过来，运行期拼模板那条路换来的是免构建，代价是 `eval` 与每次渲染的解析。
+
+体积与性能**别背数**，现算：`npm run size`（最小 gzip）、`npm run test:bench`（挂载/追加/反转的耗时表）。
+
 ## 开发
 
 ```bash
@@ -134,7 +151,8 @@ jsx.d.ts        全局 JSX 类型声明
 dist/           ./vite 与 ./compiler 的编译产物（入库，见上）
 demo/ bench/    真 DOM 验收 / 性能基准（框架自己的门）
 regress/        编译器负例与形态断言
-docs/           教程、设计取舍、踩坑排查
+docs/           教程、设计取舍、踩坑排查；给 agent 的一屏契约在 docs/agent.md
+AGENTS.md       在**这个仓库**里干活的须知（门禁、dist 入库、别加 typescript）
 ```
 
 ## 许可
