@@ -190,6 +190,23 @@ console.log('\n导航与历史栈')
   eq('replace 走 replaceState', historyCalls, [['replace', '/tasks']])
 }
 {
+  // `push` 是给"手里是路径、不是路由名"的场合（子视图常是字面量）
+  const r = fresh('/')
+  r.push('/tasks/9')
+  eq('push：跳到任意路径', historyCalls, [['push', '/tasks/9']])
+  eq('push 后 route 立刻更新', r.route.value.params, { id: '9' })
+}
+{
+  const r = fresh('/tasks')
+  r.push('/tasks')
+  eq('push：已在目标地址上 ⇒ 不动历史栈', historyCalls, [])
+}
+{
+  const r = fresh('/')
+  r.push('/tasks', { replace: true })
+  eq('push：replace 走 replaceState', historyCalls, [['replace', '/tasks']])
+}
+{
   const r = fresh('/tasks/1')
   r.navigate('task-detail', { id: '2' })
   eq('换参数 = 换地址', r.route.value.params, { id: '2' })

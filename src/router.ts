@@ -147,6 +147,14 @@ export interface Router<R extends Record<string, RoutePatterns>> {
    */
   href<K extends keyof R & string>(name: K, args?: RouteArgs<R[K]>): string
   /**
+   * 跳到任意应用内路径。已在目标地址上时**什么都不做**（不污染历史栈）。
+   *
+   * 什么时候用它是合理的：**手里是路径、不是路由名** —— 子视图（`/tasks/config`）常是
+   * 字面量，而它可能与 `:参数` 模式同形，靠 `href` 生成反而别扭。
+   * ⚠ 能用 `navigate(名字, 参数)` 就别用它：名字写错编译期就报，路径写错要到点下去才发现。
+   */
+  push(path: string, opts?: { replace?: boolean }): void
+  /**
    * 当前路由对应的页面节点。用法：`{router.view()}`。
    * ⚠ 必须写在**动态子节点位置**（也就是 `{…}` 里）；写成静态子节点会静默不生效。
    * ⚠ `views` 是**急切**的：组件在构造时就都已加载。要按页懒加载 chunk，见文件头"有意不做"。
@@ -293,19 +301,22 @@ export function createRouter<R extends Record<string, RoutePatterns>>(opts: Rout
     return q ? `${path}?${q}` : path
   }
 
+  function push(path: string, o?: { replace?: boolean }): void {
+    // 已在目标上就别动历史栈（见文件头第 2 条）
+    if (location.pathname + location.search === path) return
+    if (o?.replace) history.replaceState(null, '', path)
+    else history.pushState(null, '', path)
+    // ⚠ `pushState` / `replaceState` **都不发** `popstate`，必须自己同步一次，
+    // 否则"点按钮"与"按后退"会走两条不同的路径（见文件头第 1 条）
+    sync()
+  }
+
   function navigate<K extends keyof R & string>(
     name: K,
     args?: RouteArgs<R[K]>,
     o?: { replace?: boolean },
   ): void {
-    const target = href(name, args)
-    // 已在目标上就别动历史栈（见文件头第 2 条）
-    if (location.pathname + location.search === target) return
-    if (o?.replace) history.replaceState(null, '', target)
-    else history.pushState(null, '', target)
-    // ⚠ `pushState` / `replaceState` **都不发** `popstate`，必须自己同步一次，
-    // 否则"点按钮"与"按后退"会走两条不同的路径（见文件头第 1 条）
-    sync()
+    push(href(name, args), o)
   }
 
   function sync(): void {
@@ -323,5 +334,5 @@ export function createRouter<R extends Record<string, RoutePatterns>>(opts: Rout
   const onPop = (): void => sync()
   window.addEventListener('popstate', onPop)
 
-  return { route, navigate, href, view, dispose: () => window.removeEventListener('popstate', onPop) }
+  return { route, navigate, href, push, view, dispose: () => window.removeEventListener('popstate', onPop) }
 }
