@@ -37,6 +37,7 @@ export default defineConfig({ plugins: [lite({ runtime: '@asunajs/lite' })] })
 |---|---|
 | 状态 | `ref`（读写作 `.value`）`computed`（派生 + 缓存，**只读**）`effect` `batch` `watch` |
 | 组件 | 普通函数组件 + `mount(App, '#app')` `useSlots` `onMounted` `onUnmounted`；类型 `Component` `Slots` `Ref` |
+| 路由（**可选件**） | `createRouter({ routes, fallback, views? })` → `{ route, navigate, href, view, dispose }`。**别自己写路由** —— `pushState` 不发 `popstate`、历史栈去重这些坑已经收在里面；页面用 `{router.view()}` 渲染（见下） |
 | 编译器产物用 | `template` `setNodes` `setClass` `setAttr` `setProp` `setValue` `on` `spread` `createFor` `createComponent` `lazySlot` `remove` |
 | 运行时内部件 | `createNodes` `insert` `onRemove` |
 
@@ -67,6 +68,7 @@ export default defineConfig({ plugins: [lite({ runtime: '@asunajs/lite' })] })
 | `ref={el}`（模板引用） | 元素上多一个字符串属性，**没有模板引用这回事** |
 | `onclick={fn}`（小写） | 属性值是函数源码，**不是事件**（判据：`on` 开头 + 第三个字符大写） |
 | 块体 `.map()` 回调（`=> { … return <li/> }`） | 不建 `createFor`，退化成整块重建（`key` 被忽略） |
+| **把组件当值传**：`{VIEWS[name]}`、`{ok ? C : D}`、`{C}` | **不生成 `createComponent`**，那个位置被塞进一个函数值 ⇒ 编得过、跑起来空白或错乱。组件按**语法**识别（首字母大写 / 带点），所以**必须写成 JSX 字面量**（`<C/>`）。路由表要查表渲染就用 `{router.view()}` |
 
 这些**会抛错**（编译器直接拒绝）：非 `.map()` 位置的 `key`、指令式属性（`v-if` 那一族）、
 `@click` 简写、组件上的 `{...spread}`、空元素带子节点、条件分支不是 JSX/`null`、

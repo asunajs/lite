@@ -1,6 +1,6 @@
 {
   "name": "@asunajs/lite",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "无虚拟 DOM + 编译期绑定的 TSX 前端框架：零依赖运行时 + Vite 插件（TSX 折成模板串与逐槽 effect）",
   "keywords": [
     "tsx",
@@ -71,9 +71,10 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsgo --noEmit",
     "test:compiler": "node regress/compiler.mjs",
+    "test:router": "node regress/router.mjs",
     "test:demo": "node demo/run.mjs",
     "test:bench": "node bench/run.mjs",
-    "gates": "npm run typecheck && npm run build && npm run test:compiler",
+    "gates": "npm run typecheck && npm run build && npm run test:compiler && npm run test:router",
     "size": "npm run build && node size.mjs",
     "prepack": "node scripts/build.mjs"
   }

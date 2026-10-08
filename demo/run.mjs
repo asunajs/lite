@@ -48,6 +48,9 @@ const grab = (id) => {
 
 const err = grab('err')
 if (err) console.log(`页面抛错：\n${err}\n`)
+// 实验块独立抓：它边跑边写，即使后面某组挂死也留得下前面几组（见 main.tsx 的实验段）
+const exp = grab('exp')
+if (exp) console.log(`${exp}\n`)
 const result = grab('result')
 if (!result) {
   console.log('没抓到 #result —— 页面可能整个没跑起来。原始抓取片段：')

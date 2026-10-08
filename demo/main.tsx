@@ -524,6 +524,228 @@ ok('untrack：被包住的信号变化不触发重跑', uRuns === uRunsInit, `�
 ua.value = 2
 ok('untrack：包在外面的信号照样触发重跑', uRuns === uRunsInit + 1, `runs=${uRuns}`)
 
+// ── 实验：同步跨视图跳转到底在什么条件下炸（实测，不靠推断）────────────────
+/**
+ * `docs/pitfalls.md`「同步跨视图跳转 ⇒ 新页被无限重建」给的对策是推到**下一个任务**，
+ * 但同组织在产项目里**同步**换页也能跑。差别可能落在两个因素上：
+ *   ① 触发点在不在**被替换的子树**里；
+ *   ② 新页是否在**挂载期间写信号**（而外壳读它）。
+ *
+ * 四种组合各跑一次。结论以实测为准，测完据此改 `docs/pitfalls.md` 与路由实现。
+ *
+ * ⚠ 结果**边跑边写**进 `#exp`：万一某组真的死循环，`#result` 根本到不了，
+ * 至少还能看到前面几组。另加重建上限把"挂死"变成可抓的抛错。
+ */
+interface ExpCase {
+  inside: boolean
+  writeOnMount: boolean
+  defer: boolean
+}
+
+const expPre = document.createElement('pre')
+expPre.id = 'exp'
+const expLines: string[] = []
+const expFlush = () => (expPre.textContent = expLines.join('\n'))
+document.body.appendChild(expPre)
+
+const runExp = async (label: string, o: ExpCase) => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const page = ref(0)
+  const status = ref('')
+  const runs = { a: 0, b: 0 }
+  const go = () => (page.value = 1)
+  const fire = () => {
+    if (o.defer) queueMicrotask(go)
+    else go()
+  }
+
+  const PageA = () => {
+    runs.a++
+    return <div class="pg-a">{o.inside ? <button class="go" onClick={fire}>go</button> : null}</div>
+  }
+  const PageB = () => {
+    runs.b++
+    // 死循环护栏：把"挂死"变成可抓的抛错，否则整页超时、什么都看不到
+    if (runs.b > 2000) throw new Error('exp: PageB 重建超过 2000 次')
+    if (o.writeOnMount) onMounted(() => (status.value = 'ready'))
+    return <div class="pg-b">B</div>
+  }
+  const Shell = () => (
+    <div class="shell">
+      {o.inside ? null : <button class="go" onClick={fire}>go</button>}
+      <span class="st">{status.value}</span>
+      {page.value === 0 ? <PageA /> : <PageB />}
+    </div>
+  )
+
+  mount(Shell, host)
+  const shell = host.querySelector('.shell') as HTMLElement
+  const before = shell.childNodes.length
+  ;(host.querySelector('.go') as HTMLElement).click()
+  // 让微任务与随后的同步写都落地
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  const after = shell.childNodes.length
+  const bNodes = host.querySelectorAll('.pg-b').length
+  const aLeft = host.querySelectorAll('.pg-a').length
+  expLines.push(`${label} 子节点 ${before}→${after}  A重建${runs.a} B重建${runs.b}  B节点${bNodes} A残留${aLeft}`)
+  expFlush()
+  // 断成"每页各建一次 + 不累积"。当年这条会红（新页被追加/反复重建），见 docs/pitfalls.md
+  ok(
+    `换页无累积（${label.trim()}）`,
+    after === before && runs.a === 1 && runs.b === 1 && bNodes === 1 && aLeft === 0,
+    `子节点 ${before}→${after} A重建${runs.a} B重建${runs.b} B节点${bNodes} A残留${aLeft}`,
+  )
+}
+
+expLines.push('EXP 实验：同步跨视图跳转的触发条件')
+expFlush()
+await runExp('① 外壳触发 + 不写信号      ', { inside: false, writeOnMount: false, defer: false })
+await runExp('② 子树内触发 + 不写信号    ', { inside: true, writeOnMount: false, defer: false })
+await runExp('③ 子树内触发 + 挂载期写信号', { inside: true, writeOnMount: true, defer: false })
+await runExp('④ ③ 但推到微任务          ', { inside: true, writeOnMount: true, defer: true })
+
+/**
+ * 第二轮：①②③④ 全部正常 ⇒ "同步换页"本身不是触发条件。
+ * 换一个假设：新页在挂载期写的是**驱动换页的那个信号**（等价于"挂载时重定向"），
+ * 那会重入**同一个** `setNodes` 位置，才可能打断替换路径。
+ */
+const runExp2 = async (label: string, defer: boolean) => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const route = ref(0)
+  const runs = { a: 0, b: 0, c: 0 }
+
+  const PageA = () => {
+    runs.a++
+    return (
+      <div class="pg-a">
+        <button
+          class="go"
+          onClick={() => {
+            if (defer) queueMicrotask(() => (route.value = 1))
+            else route.value = 1
+          }}
+        >
+          go
+        </button>
+      </div>
+    )
+  }
+  const PageB = () => {
+    runs.b++
+    if (runs.b > 2000) throw new Error('exp2: PageB 重建超过 2000 次')
+    // 挂载期"重定向"：写的是**驱动换页的同一个信号**
+    onMounted(() => (route.value = 2))
+    return <div class="pg-b">B</div>
+  }
+  const PageC = () => {
+    runs.c++
+    return <div class="pg-c">C</div>
+  }
+  const Shell = () => (
+    <div class="shell">{route.value === 0 ? <PageA /> : route.value === 1 ? <PageB /> : <PageC />}</div>
+  )
+
+  mount(Shell, host)
+  const shell = host.querySelector('.shell') as HTMLElement
+  const before = shell.childNodes.length
+  ;(host.querySelector('.go') as HTMLElement).click()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  const after2 = shell.childNodes.length
+  const n = { a: host.querySelectorAll('.pg-a').length, b: host.querySelectorAll('.pg-b').length, c: host.querySelectorAll('.pg-c').length }
+  expLines.push(
+    `${label} 子节点 ${before}→${after2}  A重建${runs.a} B重建${runs.b} C重建${runs.c}  A节点${n.a} B节点${n.b} C节点${n.c}`,
+  )
+  expFlush()
+  // 挂载期"重定向"写的是驱动换页的同一个信号 —— 最可能打断替换路径的形态
+  ok(
+    `挂载期重定向不累积（${label.trim()}）`,
+    after2 === before && runs.a === 1 && runs.b === 1 && runs.c === 1 && n.a === 0 && n.b === 0 && n.c === 1,
+    `子节点 ${before}→${after2} A重建${runs.a} B重建${runs.b} C重建${runs.c} A节点${n.a} B节点${n.b} C节点${n.c}`,
+  )
+}
+
+await runExp2('⑤ 挂载期重定向 + 同步      ', false)
+await runExp2('⑥ 挂载期重定向 + 推到微任务', true)
+
+/**
+ * 第三轮：前两轮都是**声明式**切页（`{cond ? <A/> : <B/>}`）。
+ * 在产项目用的是**命令式**：`watch(page, () => { unmount(); mount(next) })`。
+ * `pitfalls.md` 提到"（或 effect）的求值还没退栈"，这一轮才是最忠实的复现。
+ */
+const runExp3 = async (label: string, defer: boolean) => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const page = ref(0)
+  const runs = { a: 0, b: 0 }
+  let unmount: (() => void) | null = null
+
+  const PageA = () => {
+    runs.a++
+    return (
+      <div class="pg-a">
+        <button
+          class="go"
+          onClick={() => {
+            if (defer) queueMicrotask(() => (page.value = 1))
+            else page.value = 1
+          }}
+        >
+          go
+        </button>
+      </div>
+    )
+  }
+  const PageB = () => {
+    runs.b++
+    if (runs.b > 2000) throw new Error('exp3: PageB 重建超过 2000 次')
+    return <div class="pg-b">B</div>
+  }
+
+  // 外壳只提供挂载点；页面的挂与摘由 watch 命令式驱动（在产形态）
+  const Shell = () => (
+    <div class="shell">
+      <div class="slot"></div>
+    </div>
+  )
+  mount(Shell, host)
+  const slot = host.querySelector('.slot') as HTMLElement
+
+  const swap = () => {
+    unmount?.()
+    unmount = mount(page.value === 0 ? PageA : PageB, slot)
+  }
+  swap()
+  const w = watch(page, swap)
+
+  const before = slot.childNodes.length
+  ;(host.querySelector('.go') as HTMLElement).click()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  const after3 = slot.childNodes.length
+  const m = { a: host.querySelectorAll('.pg-a').length, b: host.querySelectorAll('.pg-b').length }
+  expLines.push(
+    `${label} 槽内节点 ${before}→${after3}  A重建${runs.a} B重建${runs.b}  A节点${m.a} B节点${m.b}`,
+  )
+  expFlush()
+  // 在产项目的形态：watch 命令式 mount/unmount，且由子树内的点击**同步**触发
+  ok(
+    `watch 命令式切页不累积（${label.trim()}）`,
+    after3 === before && runs.a === 1 && runs.b === 1 && m.a === 0 && m.b === 1,
+    `槽内节点 ${before}→${after3} A重建${runs.a} B重建${runs.b} A节点${m.a} B节点${m.b}`,
+  )
+  w.dispose()
+}
+
+await runExp3('⑦ watch 命令式切页 + 同步  ', false)
+await runExp3('⑧ watch 命令式切页 + 微任务', true)
+
 const fails = out.filter((l) => l.startsWith('FAIL')).length
 const pre = document.createElement('pre')
 pre.id = 'result'
