@@ -20,7 +20,9 @@
 
 * 一次对真实 TSX 应用的全量用法普查显示，真正用到的 Vue API 只有 `ref` /
   `onMounted` / `onUnmounted` / `watch` / `useSlots` 这几个；Teleport / Transition /
-  KeepAlive / Suspense / 异步组件 / 指令 / `computed` 一处都没用（§2）。
+  KeepAlive / Suspense / 异步组件 / 指令一处都没用（§2）。
+  ⚠ `computed` 当初也在这张"0 处使用"的名单里，因此被删过一轮；**后来又加回来了** ——
+  理由不是"用的人变多"，而是它现在**摇得掉**（不用就 0 B，用 +46 B gzip，见 §5.2）。
 * 框架运行时是一块**每个用户都要下载的地板**：参照 Solid 核心 ≈7 KB gzip、
   Vue Vapor 的运行时地板 ≈16 KB gzip（§5 有现算口径）。
 
@@ -34,13 +36,14 @@
 | 用到的 Vue API | lite |
 |---|---|
 | `ref` / `onMounted` / `onUnmounted` / `watch` / `useSlots` | ✅ |
-| `computed` / `reactive` / `nextTick` / `provide` / `inject` / `toRef` | ❌ 不做 |
+| `computed` | ✅ **后加的**：普查里 0 处使用，但它**摇得掉**（不用就 0 B，用 +46 B gzip，§5.2） |
+| `reactive` / `nextTick` / `provide` / `inject` / `toRef` | ❌ 不做 |
 | 指令（`v-if` 等） / 模板引用 / `class` 数组·对象 / `style` 对象 | ❌ 不做 |
 
 TSX 用到的形态同样只有这几种：静态 `class`、动态 `class`、`onXxx` 事件、`key=`、
 `{...obj}` 展开、三元条件、`.map()`、片段。
 
-**结论：这个框架要支持的东西非常少** —— 4 个响应式原语 + 一套 JSX 形态。
+**结论：这个框架要支持的东西非常少** —— 5 个响应式原语 + 一套 JSX 形态。
 这是运行时能压到几 KB 的前提，也是"编译器敢把路径算进源码"的前提。
 
 ## 3. 运行时
@@ -275,13 +278,70 @@ Vite / Rolldown / es2022 / 默认压缩器的生产构建后 gzip：
   陈旧 effect 自毁、槽内容的记账），就多一份字节 —— 这些现场见 [`pitfalls.md`](pitfalls.md)。
 * 中间删过一批"只为兼容别的框架词汇表而留"的东西（`computed` / `createStore` /
   `renderEffect` 这些别名），同时加上 effect 的组件作用域归属、`batch` 的再入排空、
-  循环护栏，净 **+187 B gzip**。
+  循环护栏，净 **+187 B gzip**。（`computed` 后来按"摇得掉"的口径**又加回来了**，见 §5.2；
+  `createStore` / `renderEffect` 没回来 —— 它们不是摇得掉的那一类。）
 * 也往回走过：诊断代码改成**编译期剥离**（`src/dev.ts` 的 `DEV = import.meta.env.DEV`）
   一次 **−337 B gzip**，且没删任何功能 —— 开发态告警一条不少，只是不再进生产产物。
   同批还去掉了只给告警用的"调用方标签"参数（生产折掉告警后字符串仍留在产物里）。
 * 修内存泄漏（列表行内 effect 挂到行节点下）又加回一点。
 
 ⇒ **字节是全局税**：判断"要不要为一个能力加运行时"时，按 §8.0 的账算。
+
+### 5.2 按需付费：与主流框架对标
+
+**先分清两个数**（`npm run size` 分两段量）：
+
+* **运行时全量**（`src/index.ts` 的每个导出都用上）—— 上界，第二段里那两行。
+* **典型页面端到端**（运行时的**一个子集** + 编译器产物 + 页面代码）—— **用户真正下载的**。
+  最小页（`ref` + 文本 + 事件）比全量小 **约 800 B** ⇒ 摇树是真的在省，不是纸面说法。
+
+**原语的边际代价（现算，别背）**：`computed` **+46 B gzip**、`untrack` +28 B、`watch` +51 B、
+组件 + 插槽 +73 B、**keyed 列表 +446 B**（最贵的一档：`createFor` 的 diff 与 keyed 复用都在里面）。
+
+这两组数就是选型口径：**只加"用不到就摇得掉"的东西**。`computed` / `untrack` 编译器**不生成**
+它们 ⇒ 不用的人一分不付；而 `createFor` 这类**编译器会生成**的，是任何用了列表的页面躲不掉的
+地板 —— 所以对它们的取舍要按"每个用户都付"来算（§8.0）。
+
+#### 7 个主流框架有什么（调研，2026-10）
+
+| | Solid | Vue 3/Vapor | Svelte 5 | Preact | Angular | Alpine | Lit | **lite** |
+|---|---|---|---|---|---|---|---|---|
+| 派生（带缓存） | createMemo | computed | $derived | computed | computed | getter | ✗ | **computed ✓** |
+| 不订阅地读 | untrack | 仅内部 | untrack | untracked | untracked | raw | ✗ | **untrack ✓** |
+| effect 的 cleanup | ✓ | ✓ | 返回函数 | 返回函数 | onCleanup | $cleanup | 控制器 | ✗（见下） |
+| context | ✓ | ✓ | ✓ | ✓ | ✓ | store | 独立包 | ✗ |
+| 双向绑定 | ✗ | v-model | bind: | ✗ | ngModel | x-model | ✗ | ✗ |
+| 列表原语 | For / Index | v-for | each | ✗ | @for | x-for | repeat | `.map()` + key |
+| 异步资源 | createResource | ✗ | `{#await}` | ✗ | resource() | ✗ | 独立包 | ✗ |
+| 公开 `batch` | ✓ | 仅内部 | 仅内部 | ✓ | 仅内部 | ✗ | ✗ | ✓ |
+
+**lite 缺的那四样，缺法各不相同**：
+
+* **`computed` / `untrack`：加了**（就是上面那 46 B / 28 B，两者都摇得掉）。
+  对照 Solid：它的 memo 边际实测 **≈470 B gzip** —— 差在"懒求值"那套（脏标记 + 依赖双向链表 +
+  版本号）；lite 借现成的 `Effect` + `RefImpl`，用"依赖一变就算"换掉了那套调度。
+  代价写在文档里了：**急**（没人读也在算），要懒就把表达式写进 JSX（§5.2 之外的用法见 guide）。
+* **effect 的 cleanup：不加**。它要动 `Effect.run()` / `dispose()`，而那是**每一条** effect 都走
+  的路径 ⇒ 人人付费。现有 API 够用：effect 里先清上一个再建（句柄存模块级变量），
+  组件级清理用 `onUnmounted`。
+* **context：不加**。要渲染器维护一条上下文栈 ⇒ 又是人人付费；状态惯例是模块级 `ref`（§3）。
+* **双向绑定：不加**。4/7 有、3/7 没有 ⇒ 不做也站得住；`value={x.value}` + `onInput` 两行的事。
+
+（`batch` 与 `watch` 主流多半**不做公开 API**（Vue / Svelte / Angular 都藏在内部），
+lite 这两个是**架构逼出来的**：没有微任务调度器 ⇒ 合批只能显式；没有调度器也就没有
+`watchEffect` 那类"跑在渲染前后"的钩子，`watch` 补的是"值变了做点副作用"这个口子。
+两者都摇得掉，所以留着。）
+
+#### 编译器产物里的 PURE 标注
+
+编译器给**模块级的 `template()`** 打了 `/*#__PURE__*/`（见 `compiler.ts` 的 `tpl()`）。
+有先例：Solid 给 hoisted `template()` 打标（`babel-plugin-jsx-dom-expressions`）、
+Vue 的 `compiler-core` 有 `PURE_ANNOTATION`（只给 hoisted 调用）、Angular 给 `ɵɵdefineComponent`
+打标（PR #41096）；Svelte 与 Preact 的编译器产物**没有**。
+
+不打的后果是实测出来的：产物里唯一的**模块级调用**会被打包器当成"可能有副作用"而保留 ⇒
+一个**没被引用**的组件，它那整段静态 DOM 照样进产物。实测：40 行静态标记**白付 443 B gzip**；
+打上之后同一份页面从 2,199 B 降到 1,769 B（残余差 13 B）。
 
 ## 6. 性能（实测，`npm run test:bench`）
 
@@ -393,7 +453,7 @@ LITE_CHROME_NO_SANDBOX=1 npm run test:demo     # 或 npm run test:bench
 | 指令、模板引用、`class` 数组/对象、`style` 对象 | 0 处使用，**不做**，也**不检测**（§4.5 的静默区） |
 | 事件委托 | 不做：逐元素 `addEventListener`；委托要额外付约 250 B gzip，并引入"事件目标穿过 shadow / `stopPropagation`"这类边界 |
 | LIS（整表反转快路径） | 不做，理由同 §6（反转是唯一的劣化项）—— 拿"每个用户都付的字节"换"少见场景" |
-| Vue 兼容层 | 不做：不提供 `computed` / `createStore` / `renderEffect` 这类别名，也不提供 `'vue'` alias |
+| Vue 兼容层 | 不做：不提供 `createStore` / `renderEffect` 这类别名，也不提供 `'vue'` alias（`computed` 是**自己实现**的原语，不是兼容别名，见 §5.2） |
 
 ## 9. 复现命令（都在仓库根目录跑）
 

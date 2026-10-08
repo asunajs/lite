@@ -35,12 +35,16 @@ export default defineConfig({ plugins: [lite({ runtime: '@asunajs/lite' })] })
 
 | 分类 | 导出 |
 |---|---|
-| 状态 | `ref`（读写作 `.value`）`effect` `batch` `watch` |
+| 状态 | `ref`（读写作 `.value`）`computed`（派生 + 缓存，**只读**）`effect` `batch` `watch` |
 | 组件 | 普通函数组件 + `mount(App, '#app')` `useSlots` `onMounted` `onUnmounted`；类型 `Component` `Slots` `Ref` |
 | 编译器产物用 | `template` `setNodes` `setClass` `setAttr` `setProp` `setValue` `on` `spread` `createFor` `createComponent` `lazySlot` `remove` |
 | 运行时内部件 | `createNodes` `insert` `onRemove` |
 
 `mount()` **返回卸载函数**：`const unmount = mount(App, '#app')`，调用它跑 `onUnmounted` 并摘干净。
+
+⚠ `computed` 是**急**的（依赖一变就算，哪怕当轮没人读）；它真正的收益是**去重** ——
+派生值没变（`Object.is`）就不惊动下游 effect。只想"读一眼当前值、不订阅它"用 `untrack(() => …)`。
+⚠ 这两个（以及 `watch`）编译器**不生成** ⇒ 用不到就整段被摇掉，不占体积（`computed` 用上 +46 B gzip）。
 
 ## 4. 硬约束（违反的后果写在后边）
 

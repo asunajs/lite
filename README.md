@@ -20,7 +20,7 @@ const unmount = mount(Counter, '#app') // 第二个参数也接元素：mount(Co
 | **运行时** | 6 个文件、**零依赖**（只用 DOM 与 ES2022），`src/**` 不 import 任何包 |
 | **构建期** | `vite`（插件宿主）+ `oxc-parser`（编译器用它解析 TSX） |
 | **需要** | 真 DOM（**没有 SSR / 水合**）、构建目标 ES2022 起 |
-| **没有** | 虚拟 DOM、`computed` / `reactive` / `nextTick`、`provide`/`inject`、Teleport / Transition / Suspense、异步组件、指令（`v-if` 那一族）、事件委托、模板引用（`ref=`） |
+| **没有** | 虚拟 DOM、`reactive` / `nextTick`、`provide`/`inject`、Teleport / Transition / Suspense、异步组件、指令（`v-if` 那一族）、事件委托、模板引用（`ref=`）、路由 / store |
 
 它刻意**小**：语法子集由"真实项目里到底用了什么"普查决定，不含"以后可能用得上"的东西。
 **一屏契约**（给 agent 与赶时间的人）见 [`docs/agent.md`](docs/agent.md)；
@@ -96,7 +96,7 @@ export default defineConfig({
 
 | 分类 | API |
 |---|---|
-| 状态 | `ref` `effect` `batch` `watch` |
+| 状态 | `ref` `computed` `effect` `batch` `watch` |
 | 组件 | 普通函数组件 + `mount` `useSlots` `onMounted` `onUnmounted`；类型 `Component` / `Slots` / `Ref` |
 | 编译产物用 | `template` `setNodes` `setClass` `setAttr` `setProp` `setValue` `on` `spread` `createFor` `createComponent` `lazySlot` `remove` |
 | 运行时内部件 | `createNodes` `insert` `onRemove` |

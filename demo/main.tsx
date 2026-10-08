@@ -8,7 +8,7 @@
  * 要看实时数字就跑 `npm run test:demo`，最后一行打印"✓ 全过（N 条）"。
  */
 
-import { batch, mount, onMounted, onUnmounted, ref, useSlots, watch } from '../src/index'
+import { batch, computed, effect, mount, onMounted, onUnmounted, ref, untrack, useSlots, watch } from '../src/index'
 
 /** 自测用的计数器。 */
 const demo = { mounted: 0, unmounted: 0, mountedInDoc: false, late: 0, watches: [] as string[] }
@@ -453,6 +453,76 @@ const stepFirst = document.querySelector('#steps-list > li')
 stepNames.value = [...stepNames.value].reverse()
 ok('位置敏感的行：重排后步号仍按位置（第 1 步在最前）', stepRows()[0] === '第 1 步：丙', stepRows().join('|'))
 ok('位置敏感的行：重排是重建（旧节点已脱开）', !stepFirst?.isConnected, `isConnected=${!!stepFirst?.isConnected}`)
+
+/**
+ * `computed`：**缓存**（读多次只算一次）、**去重**（派生值没变就不惊动下游）、**链式**、
+ * **卸载即停**。⚠ 这四条是它相对"把表达式写进 JSX"的**全部**价值，任何一条失效都等于白加。
+ */
+const cn = ref(1)
+let calcCount = 0
+const doubled = computed(() => {
+  calcCount++
+  return cn.value * 2
+})
+const plusOne = computed(() => doubled.value + 1)
+ok('computed：初值立刻算出来（含链上的）', doubled.value === 2 && plusOne.value === 3)
+
+const calcBefore = calcCount
+doubled.value
+doubled.value
+plusOne.value
+ok('computed：读多次只算一次（缓存）', calcCount === calcBefore, `多算了 ${calcCount - calcBefore} 次`)
+
+cn.value = 5
+ok('computed：依赖变了自动重算，链上跟着变', doubled.value === 10 && plusOne.value === 11)
+
+// 去重：`parity` 的值没变 ⇒ 下游 effect 不该被惊动（这是 computed 相对裸表达式的真收益）
+const parity = computed(() => cn.value % 2)
+let parityHits = 0
+effect(() => {
+  parity.value
+  parityHits++
+})
+const hitsBefore = parityHits
+cn.value = 7 // 5 → 7：parity 仍是 1
+ok('computed：派生值没变 ⇒ 下游不重跑', parityHits === hitsBefore, `下游多跑了 ${parityHits - hitsBefore} 次`)
+
+// 归属：组件内建的 computed 随组件卸载停掉
+const aliveC = ref(true)
+let liveCalc = 0
+const LiveComputed = () => {
+  const c = computed(() => {
+    liveCalc++
+    return cn.value
+  })
+  return <p id="computed-live">{c.value}</p>
+}
+const LiveHost = () => <div id="computed-host">{aliveC.value ? <LiveComputed /> : null}</div>
+const liveHost = document.createElement('div')
+document.body.appendChild(liveHost)
+mount(LiveHost, liveHost)
+ok('computed：能直接用在 JSX 里（读到的是派生值）', document.querySelector('#computed-live')?.textContent === '7')
+const liveBefore = liveCalc
+aliveC.value = false
+cn.value = 100
+ok('computed：随组件卸载停掉（不再重算）', liveCalc === liveBefore, `卸载后仍算了 ${liveCalc - liveBefore} 次`)
+
+/**
+ * `untrack`：在 effect 里读信号但**不建立依赖**（否则依赖会越滚越大，改个无关状态也跟着重跑）。
+ */
+const ua = ref(1)
+const ub = ref(0)
+let uRuns = 0
+effect(() => {
+  uRuns++
+  ua.value
+  untrack(() => ub.value)
+})
+const uRunsInit = uRuns
+ub.value = 5
+ok('untrack：被包住的信号变化不触发重跑', uRuns === uRunsInit, `多跑了 ${uRuns - uRunsInit} 次`)
+ua.value = 2
+ok('untrack：包在外面的信号照样触发重跑', uRuns === uRunsInit + 1, `runs=${uRuns}`)
 
 const fails = out.filter((l) => l.startsWith('FAIL')).length
 const pre = document.createElement('pre')

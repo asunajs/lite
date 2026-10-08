@@ -1,8 +1,8 @@
 /**
  * lite —— 轻量 TSX 前端框架：**无虚拟 DOM + 编译期绑定**，与 Vue Vapor 同路。
  *
- * 语法子集**刻意窄**，不含"以后可能用得上"的东西：**没有** computed / reactive /
- * provide-inject / nextTick / Teleport / Transition / Suspense / 异步组件 / 指令。
+ * 语法子集**刻意窄**，不含"以后可能用得上"的东西：**没有** reactive / provide-inject /
+ * nextTick / Teleport / Transition / Suspense / 异步组件 / 指令 / 路由 / store。
  * 唯一保留的 Vue 旧名是 `ref` / `.value`（读起来就是"一个可写的格子"，见 `signal.ts`）。
  *
  * 下面三组导出**别当成同一回事**：
@@ -18,6 +18,8 @@ export { createFor } from './control'
 export { lazySlot, on, remove, setAttr, setClass, setNodes, setProp, setValue, spread, template } from './dom'
 
 // ── 业务代码会手写到的那批 ─────────────────────────────────────────────────
+// `computed` / `untrack` 只在这里导出（编译器**不**生成它们）—— 用不到就整段被摇掉，不占体积。
+export { computed, type ReadonlyRef, untrack } from './signal'
 export { type Component, mount, onMounted, onUnmounted, type Slots, useSlots } from './component'
 
 // ── 运行时自己的内部件（demo / bench / 排障会直接调，业务代码不该用）────────

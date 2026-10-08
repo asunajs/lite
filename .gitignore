@@ -4,6 +4,8 @@ node_modules/
 # 自检脚本的临时目录（脚本结尾都会自己删，抛错在半路就留残骸）
 regress/.check-tmp/
 .size-tmp/
+# 手工做"端到端体积"实验时用的临时工程（size.mjs 第二段已经把它自动化了）
+.ts-tmp/
 
 # 日志与临时页面
 *.log

@@ -97,7 +97,7 @@ your-project/
 ```
 
 运行时是**六份文件**（`src/` 下的 `index` / `signal` / `dom` / `control` / `component` / `dev`）、
-**四个响应式原语**（`ref` / `effect` / `batch` / `watch`）—— 没有 `computed`、没有 `reactive`、
+**五个响应式原语**（`ref` / `computed` / `effect` / `batch` / `watch`）—— 没有 `reactive`、
 没有 `createStore`。`dev.ts` 也是运行时的一部分：它进产物，但 `DEV` 在生产构建里被折成
 `false`，整块被压缩器删掉。
 
@@ -481,8 +481,8 @@ const Panel = (props: { title: string }) => {
 ## 7. 状态
 
 `src/index.ts` 导出的状态 API **就四个**：`ref` `effect` `batch` `watch`。
-没有 `computed` / `reactive` / `nextTick` / `createStore`。
-派生值就写进 JSX（§6.1）或用一个模块级 `ref` + 在写的那一处同步更新。
+没有 `reactive` / `nextTick` / `createStore`。
+派生值用 `computed`（§7）写进 JSX（§6.1），或在写的那一处同步更新一个 `ref`。
 
 ### ref
 
@@ -546,27 +546,35 @@ batch(() => { a.value = 1; b.value = 2 })
 `batch` 是**可重入**的：排空队列那一轮仍然算批量，所以"batch 里再改 batch"
 不会当场同步刷，一轮里同一条 effect 最多跑一次。
 
-### 派生值没有原语，怎么办
-
-`computed` 没有。两种写法够用：
+### 派生值：写进 JSX、`computed`、还是顺手算一个 ref
 
 ```tsx
-// ① 只在渲染里用 ⇒ 直接写进 JSX，那条绑定自己会重算
-<span>{list.value.filter((x) => x.on).length} 项</span>
+const items = ref([{ on: true }])
 
-// ② 多处用 / 要在事件里读 ⇒ 在"写的那个地方"顺手更新一个 ref
-const active = ref(0)
+// ① 只在渲染里读一次 ⇒ 直接写进 JSX，那条绑定自己会重算（不建对象、不占字节）
+<span>{items.value.filter((x) => x.on).length} 项</span>
+
+// ② 多处读 / 要在事件里读 / 算得贵 ⇒ computed：依赖变了才重算，读多少次都只算一次
+const active = computed(() => items.value.filter((x) => x.on).length)
+console.log(active.value) // 不会算第二遍
+
+// ③ 想在"写的那个地方"顺手算（不引入任何新原语，也不多一个对象）
+const onCount = ref(0)
 const toggle = (i: number) => {
   batch(() => {
     items.value = items.value.map((x, j) => (j === i ? { ...x, on: !x.on } : x))
-    active.value = items.value.filter((x) => x.on).length
+    onCount.value = items.value.filter((x) => x.on).length
   })
 }
 ```
 
-②是"多算 JS、少碰 DOM"的那条老规矩：算在写入侧，渲染侧只读一个格子。
-真需要"读到才算 + 缓存"再说 —— 那段实现是**独立的一块**
-（一条订阅 `fn` 的 effect + 一个输出 ref），加上来运行时其余部分一行不用改。
+* `computed` 是**急**的：依赖一变就算，**哪怕当轮没人读**。要"读到才算"，用 ①。
+* 它返回**只读**格子（写它没意义：下次依赖变化就被覆盖）。
+* 它真正的收益是**去重**：派生值没变时（`Object.is` 那一层），下游 effect **不会**被惊动。
+  例：`const dark = computed(() => theme.value === 'dark')` —— 主题写十次，只有"明↔暗"翻的
+  那一次才让下游重跑；裸表达式没有这层，下游每次都跑。
+* ③ 仍是"多算 JS、少碰 DOM"那条老规矩；三者按需选，没有唯一答案。
+* 边际体积：**+46 B gzip**（`npm run size` 现算，含页面那几行）；用不到就整段被摇掉。
 
 ---
 
@@ -693,7 +701,7 @@ const toggle = (i: number) => {
 | `ref={el}`（模板引用） | 不报错 → 元素上多一个字符串属性 |
 | `onclick={fn}`（小写） | 不报错 → 属性值是函数源码 |
 | `{xs.value.map((x) => { …; return <Row key={x.id}/> })}`（块体回调） | 不报错 → 退化成整块重建（§8.2） |
-| `provide` / `inject` / `reactive` / `nextTick` / `computed` / `createStore` | **没有导出**：`import` 它们直接报 `TS2305: Module '"lite"' has no exported member 'computed'` |
+| `provide` / `inject` / `reactive` / `nextTick` / `createStore` | **没有导出**：`import` 它们直接报 `TS2305: Module '"lite"' has no exported member 'provide'` |
 | 异步组件 / 代码分割 / SSR / 水合 / Teleport / Transition / Suspense / KeepAlive | 不支持 |
 
 `<label class="x" />` 这种**非空元素写自闭合**是安全的：编译器补出
@@ -714,7 +722,7 @@ const toggle = (i: number) => {
 7. **没有模板引用**，用 DOM 查找（§9）。
 8. **组件内外手写的 `effect` / `watch` 归谁管，不一样**：组件体内建的随组件销毁；
    **组件外**（模块级）建的没人管，要自己拿句柄 `dispose()`（§7）。
-9. **别指望 `computed`**：没有。派生值写进 JSX，或在写入侧顺手算一个 ref（§7）。
+9. **`computed` 是急的**：依赖一变就算，哪怕当轮没人读它。要"读到才算"就把表达式写进 JSX（§7）。
 10. **别手动增删 / 搬动框架生成的节点**：动态位置靠 `<!---->` 占位注释定位，
     模板子树是克隆出来的。把它们挪走会让后续更新插错位置。
 

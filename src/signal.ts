@@ -1,15 +1,16 @@
 /**
  * 响应式核心。设计取舍都为"小 + 够用"：
  *
- * 1. **同步 + 批量**，不做微任务调度队列：依赖链只有"信号 → DOM 写入"这一层，没有
- *    computed 套 computed 的深链，省掉整套调度器（约 300B）；要合批就用 `batch()`。
+ * 1. **同步 + 批量**，不做微任务调度队列：要合批就用 `batch()`，不引入 nextTick。
  * 2. **不用 Proxy**：信号是类实例、读写走访问器 —— Proxy 每次读写都过陷阱，既慢又占字节。
  * 3. **依赖记账用双向 Set**：effect 记着自己的依赖（重跑前清），信号记着自己的订阅者
  *    （变更时通知）；两边都留一份，重跑时才能精确解绑。
+ * 4. **`computed` 是"急"的**（依赖一变就算，不等读）：同步模型里最省字节的实现；顺带靠
+ *    `RefImpl` 的 `Object.is` 拿到"派生值没变就不通知下游"的去重。链上套链会有嵌套深度，
+ *    所以循环更新的守卫同时兜住 computed 互写。
  *
- * API 只有 `ref` / `effect` / `batch` / `watch` 四个（`computed` / `createStore` 已删，
- * 要加回来只需补独立的一段：派生值 = 订阅一条 fn 的 effect + 一个 `RefImpl` 输出）。
- * `ref` / `.value` 是唯一留下的 Vue 旧名 —— 读起来就是"一个可写的格子"。
+ * API：`ref` / `computed` / `effect` / `batch` / `watch`。`ref` / `.value` 是唯一留下的
+ * Vue 旧名 —— 读起来就是"一个可写的格子"。
  */
 
 /** 当前正在运行的 effect。用模块级单值而不是给每个函数传参：少一层参数、少一堆字节。 */
@@ -94,7 +95,7 @@ export class Effect {
     if (nesting >= MAX_NESTING) {
       // ⚠ 文案刻意**短**：这是生产路径上的守卫（不像诊断那样会被 DEV 折掉），
       // 长文案是直接进产物的字节。要点保住：循环更新 + 查信号互写 + 上限值。
-      throw new Error('[lite] 循环更新：effect 复入超过 ' + MAX_NESTING + ' 层，已中断（检查两个信号是否互相写）')
+      throw new Error('[lite] 循环更新：effect 复入超过 ' + MAX_NESTING + ' 层，已中断（检查信号 / computed 是否互相写）')
     }
     for (const d of this.deps) d.subs.delete(this)
     this.deps.clear()
@@ -161,13 +162,57 @@ class RefImpl<T> {
   }
 }
 
+/** 只读格子：`computed` 的返回值，也是所有绑定/监听能接受的最小形状。 */
+export interface ReadonlyRef<T> {
+  readonly value: T
+}
+
 /** 信号。沿用 Vue 的 `ref` 名字与 `.value` 读写。 */
-export interface Ref<T> {
+export interface Ref<T> extends ReadonlyRef<T> {
   value: T
 }
 
 export function ref<T>(value: T): Ref<T> {
   return new RefImpl(value) as unknown as Ref<T>
+}
+
+/**
+ * 在 `fn` 里**不建立依赖**地读信号：读到的值不会让当前 effect 订阅它。
+ *
+ * 用在"只是想看一眼当前值，但不想因为它变了就重跑"的地方 —— 例如 effect 里读一份配置、
+ * 读当前选中项做判断。没有它，这类读会让 effect 的依赖越滚越大（症状是"改了个无关的状态，
+ * 这块也跟着重跑"）。
+ */
+export function untrack<T>(fn: () => T): T {
+  const prev = active
+  active = null
+  try {
+    return fn()
+  } finally {
+    active = prev
+  }
+}
+
+/**
+ * 派生值：**带缓存**的只读格子，`fn` 依赖变了才重算，读多少次都只算一次。
+ *
+ * ⚠ 它是**急**的（依赖一变就算，哪怕没人读）—— 同步模型里最省字节的实现；代价是"没人读的
+ * computed 也在算"。真在意那点算力，就别建它，把表达式写进 JSX（编译器本来就按位订阅）。
+ *
+ * ⚠ 返回值**只读**（类型层面；运行期写它会在下次依赖变化时被覆盖）：派生值再被写，
+ * 依赖图就没有唯一真相了。
+ *
+ * ⚠⚠ 它自己**不会**成环（只读 + 没有写就没有环）：会出事的是"computed / 信号 / effect"
+ * 混在一起互相写，那种由 `Effect` 的嵌套上限拦成一条抛错（见 `run()`）。
+ */
+export function computed<T>(fn: () => T): ReadonlyRef<T> {
+  const out = ref<T>(undefined as T)
+  // 借用 effect 的依赖记账：`fn` 里读到的信号都会订阅到这条 effect 上
+  const e = new Effect(() => {
+    out.value = fn()
+  })
+  scope?.(e)
+  return out
 }
 
 /**
@@ -223,7 +268,7 @@ function drain(): void {
  *
  * 返回的句柄：组件内创建随组件销毁（见 `ownedEffects`），组件外就用它自己停。
  */
-export function watch<T>(source: Ref<T>, cb: (value: T, oldValue: T) => void): Effect {
+export function watch<T>(source: ReadonlyRef<T>, cb: (value: T, oldValue: T) => void): Effect {
   let old = source.value
   const e = new Effect(() => {
     const v = source.value
