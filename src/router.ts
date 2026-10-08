@@ -49,8 +49,9 @@
  *
  * # 有意不做
  *
- * 嵌套路由、通配符、`base`/子路径挂载（挂到 `/app/` 下要动 `index.html` 的 `<base>`，
- * 属应用与服务端的约定）、导航守卫、滚动恢复。按"真实项目里到底用了什么"收录。
+ * 嵌套路由（父子 outlet 那种）、`base`/子路径挂载（挂到 `/app/` 下要动 `index.html` 的
+ * `<base>`，属应用与服务端的约定）、导航守卫、滚动恢复。按"真实项目里到底用了什么"收录。
+ * （**前缀模式 `*` 不算"通配符"这一档**：它是"一页拥有整片地址"的表达，两个使用方都要。）
  *
  * **按页懒加载 chunk 也不做**（`views` 是急切的，构造时组件都已在）。原因：那需要引入
  * "加载中 / 加载失败"两种状态与竞态处理，**属应用策略**（哪几个 chunk、转圈长什么样、
@@ -113,10 +114,16 @@ export interface RouterOptions<R extends Record<string, RoutePatterns>> {
    *
    * ```ts
    * routes: {
-   *   tasks: ['/tasks', '/tasks/config', '/tasks/:name/config'],
-   *   history: ['/history', '/logs'],        // 老地址照旧打得开
+   *   tasks: ['/tasks', '/tasks/:name/config'],
+   *   settings: ['/settings', '/settings/*'],   // 前缀：整片地址都归这一页
+   *   history: ['/history', '/logs'],           // 老地址照旧打得开
    * }
    * ```
+   *
+   * 末段是 `*` 的是**前缀模式**：匹配"这个前缀本身 + 它下面的任意深度"（`/settings/*`
+   * 命中 `/settings`、`/settings/security`、`/settings/a/b/c`），剩余部分进 `params['*']`。
+   * 子视图深度**数据驱动**时（`/accounts/<id>/<tab>/<sub>`）必须用它 —— 枚举深度必然漏，
+   * 而漏掉的表现是**静默落到兜底页**（地址对、界面却是另一页）。
    *
    * 为什么要这个：一页常常**不止一个地址**（子视图、改名后要兼容的老地址）。
    * 没有它就只能把子视图拆成另一个路由名，于是 `route.name` 不再等于页面 id，
@@ -176,15 +183,23 @@ function toPatterns(v: RoutePatterns): readonly string[] {
 }
 
 /**
- * 把 `/tasks/:id` 编成 `^/tasks/([^/]+)$`。
+ * 把 `/tasks/:id` 编成 `^/tasks/([^/]+)$`；末段是 `*` 的编成**前缀模式**。
  *
  * 静态段要**转义正则元字符**：路径里出现 `.` `+` `(` 之类并不罕见（`/a.b`），不转义就会
  * 变成通配、匹配到别的路径上，而且只在特定路径下才现形。
+ *
+ * `*` 只能是**末段**，表示"这一页拥有这个前缀下的**任意深度**"：`/settings/*` 匹配
+ * `/settings` 与 `/settings/security`、`/settings/a/b/c`。捕获到的剩余部分放在 `params['*']`。
+ *
+ * 为什么必须有它（而不是让调用方把深度枚举出来）：一页的子视图深度常是**数据驱动**的
+ * （`/accounts/<id>/<tab>/<sub>`），枚举必然漏；而"首段归属"这种规则本来就是这个意思。
+ * 实测教训：只给显式模式时，漏掉的深度会**静默落到兜底页** —— 地址对、界面却是另一页。
  */
 function compile(pattern: string): Compiled {
+  const segs = pattern.split('/')
+  const isPrefix = segs.length > 1 && segs[segs.length - 1] === '*'
   const keys: string[] = []
-  const body = pattern
-    .split('/')
+  const body = (isPrefix ? segs.slice(0, -1) : segs)
     .map((seg) => {
       if (seg.startsWith(':')) {
         keys.push(seg.slice(1))
@@ -193,7 +208,9 @@ function compile(pattern: string): Compiled {
       return seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     })
     .join('/')
-  return { re: new RegExp(`^${body}$`), keys }
+  if (!isPrefix) return { re: new RegExp(`^${body}$`), keys }
+  // `(?:/(.*))?` 让"前缀本身"也算命中：`/settings/*` 要匹配 `/settings`，不只是 `/settings/x`
+  return { re: new RegExp(`^${body}(?:/(.*))?$`), keys: [...keys, '*'] }
 }
 
 /**
@@ -244,7 +261,10 @@ export function createRouter<R extends Record<string, RoutePatterns>>(opts: Rout
         const m = c.re.exec(pathname)
         if (!m) continue
         const params: Record<string, string> = {}
-        for (let i = 0; i < c.keys.length; i++) params[c.keys[i]] = safeDecode(m[i + 1])
+        for (let i = 0; i < c.keys.length; i++) {
+          // 前缀模式的 `*` 在前缀本身命中时**没有捕获值**（`/settings` 匹配 `/settings/*`）
+          params[c.keys[i]] = m[i + 1] === undefined ? '' : safeDecode(m[i + 1])
+        }
         return { name, path: pathname, params, query }
       }
     }
@@ -261,6 +281,14 @@ export function createRouter<R extends Record<string, RoutePatterns>>(opts: Rout
     const bag = (args ?? {}) as Record<string, string>
 
     /**
+     * 生成链接**优先用非前缀模式**：前缀模式（`/settings/*`）是给"匹配"用的 —— 它表达的
+     * 是一整片地址，具体生成哪一个无从下手。只有整个路由都是前缀模式时才退而用它
+     * （此时把末段的 `*` 丢掉，得到前缀本身）。
+     */
+    const plain = list.filter((p) => !p.endsWith('*'))
+    const pool = plain.length ? plain : list
+
+    /**
      * **参数决定用哪个模式**：在"它要的参数都给齐了"的那些里挑**参数最多**的（更具体的
      * 优先），并列时按声明顺序。
      *
@@ -270,9 +298,9 @@ export function createRouter<R extends Record<string, RoutePatterns>>(opts: Rout
      * ⚠ 判据必须是"参数最多"而不是"第一个合格的"：无参数的模式（`/tasks`）**永远合格**，
      * 按顺序取就永远轮不到带参数的那个。
      */
-    let chosen = list[0]
+    let chosen = pool[0]
     let best = -1
-    for (const p of list) {
+    for (const p of pool) {
       const keys = paramNames(p)
       if (!keys.every((k) => bag[k] !== undefined)) continue
       if (keys.length > best) {
@@ -282,8 +310,10 @@ export function createRouter<R extends Record<string, RoutePatterns>>(opts: Rout
     }
 
     const used = new Set<string>()
-    const path = chosen
-      .split('/')
+    const segs = chosen.split('/')
+    // 末段的 `*` 是"任意深度"的占位，生成链接时丢掉（得到前缀本身）
+    if (segs[segs.length - 1] === '*') segs.pop()
+    const path = segs
       .map((seg) => {
         if (!seg.startsWith(':')) return seg
         const k = seg.slice(1)

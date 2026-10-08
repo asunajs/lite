@@ -289,6 +289,42 @@ console.log('\n一个路由名拥有多个模式（子视图 / 老地址）')
   r.dispose()
 }
 
+console.log('\n前缀模式（`*`）：一页拥有整片地址')
+{
+  const PREFIX = {
+    dashboard: '/',
+    settings: ['/settings', '/settings/*'],
+    accounts: ['/accounts', '/accounts/*'],
+    onlyPrefix: '/files/*',
+    // 前缀要排在更具体的模式**之后**，否则会把它们吃掉（声明顺序 = 优先级）
+    tasks: ['/tasks', '/tasks/:name/config', '/tasks/*'],
+  }
+  let r = null
+  const open = (path) => {
+    r?.dispose()
+    url = path
+    historyCalls.length = 0
+    r = createRouter({ routes: PREFIX, fallback: 'dashboard' })
+    return r
+  }
+
+  eq('前缀本身也命中', open('/settings').route.value.name, 'settings')
+  eq('一层子路径命中', open('/settings/security').route.value.name, 'settings')
+  eq('任意深度都命中（数据驱动的深度）', open('/settings/a/b/c').route.value.name, 'settings')
+  eq('剩余部分进 params["*"]', open('/settings/a/b').route.value.params, { '*': 'a/b' })
+  eq('前缀本身命中时 params["*"] 是空串（不是 undefined）', open('/files').route.value.params, { '*': '' })
+  eq('声明在前的普通模式优先于前缀（/settings 走普通模式，params 为空）', open('/settings').route.value.params, {})
+  eq('不会吃掉同前缀的别的名字（/settingsfoo 不命中）', open('/settingsfoo').route.value.name, 'dashboard')
+  eq('更具体的模式优先于前缀（/tasks/sign/config 走带参那个）', open('/tasks/sign/config').route.value.params, { name: 'sign' })
+  eq('前缀兜住更深的 /tasks/a/b', open('/tasks/a/b').route.value.name, 'tasks')
+  eq('只有前缀模式的路由：命中前缀本身', open('/files').route.value.name, 'onlyPrefix')
+
+  eq('href：非前缀模式优先', open('/').href('settings'), '/settings')
+  eq('href：只有前缀模式时退而用前缀本身（丢掉 *）', open('/').href('onlyPrefix'), '/files')
+  eq('href：带参模式仍优先于前缀', open('/').href('tasks', { name: 'sign' }), '/tasks/sign/config')
+  r.dispose()
+}
+
 live?.dispose()
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(bad ? `\n✗ ${bad} 条不符合预期` : '\n✓ 路由用例全部符合预期')

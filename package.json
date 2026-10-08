@@ -1,6 +1,6 @@
 {
   "name": "@asunajs/lite",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "无虚拟 DOM + 编译期绑定的 TSX 前端框架：零依赖运行时 + Vite 插件（TSX 折成模板串与逐槽 effect）",
   "keywords": [
     "tsx",

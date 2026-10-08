@@ -37,7 +37,7 @@ export default defineConfig({ plugins: [lite({ runtime: '@asunajs/lite' })] })
 |---|---|
 | 状态 | `ref`（读写作 `.value`）`computed`（派生 + 缓存，**只读**）`effect` `batch` `watch` |
 | 组件 | 普通函数组件 + `mount(App, '#app')` `useSlots` `onMounted` `onUnmounted`；类型 `Component` `Slots` `Ref` |
-| 路由（**可选件**） | `createRouter({ routes, fallback, views? })` → `{ route, navigate, href, push, view, dispose }`。**别自己写路由** —— `pushState` 不发 `popstate`、历史栈去重这些坑已经收在里面；页面用 `{router.view()}` 渲染（见下）。一个路由名可拥有**多个**模式（`tasks: ['/tasks', '/tasks/:name/config']`），**由参数决定 `href` 用哪个**；手里是路径（子视图字面量）时用 `push(path)` |
+| 路由（**可选件**） | `createRouter({ routes, fallback, views? })` → `{ route, navigate, href, push, view, dispose }`。**别自己写路由** —— `pushState` 不发 `popstate`、历史栈去重这些坑已经收在里面；页面用 `{router.view()}` 渲染（见下）。一个路由名可拥有**多个**模式（`tasks: ['/tasks', '/tasks/:name/config']`），**由参数决定 `href` 用哪个**；手里是路径（子视图字面量）时用 `push(path)`。末段 `*` = **前缀模式**（`/settings/*` 命中 `/settings` 与它下面任意深度），子视图深度数据驱动时用它 |
 | 编译器产物用 | `template` `setNodes` `setClass` `setAttr` `setProp` `setValue` `on` `spread` `createFor` `createComponent` `lazySlot` `remove` |
 | 运行时内部件 | `createNodes` `insert` `onRemove` |
 
