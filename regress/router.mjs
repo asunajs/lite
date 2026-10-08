@@ -231,6 +231,47 @@ throws(
   '没有传 views',
 )
 
+console.log('\n一个路由名拥有多个模式（子视图 / 老地址）')
+{
+  // 顺序有意义：`/tasks/config` 必须排在 `/tasks/:name/config` 之前，否则 config 会被当任务名
+  const MULTI = {
+    dashboard: '/',
+    tasks: ['/tasks', '/tasks/config', '/tasks/:name/config'],
+    history: ['/history', '/logs'],
+    accounts: ['/accounts', '/accounts/:view'],
+  }
+  let r = null
+  const open = (path) => {
+    r?.dispose()
+    url = path
+    historyCalls.length = 0
+    r = createRouter({ routes: MULTI, fallback: 'dashboard' })
+    return r
+  }
+
+  eq('规范地址命中', open('/tasks').route.value.name, 'tasks')
+  eq('子视图归同一页', open('/tasks/config').route.value.name, 'tasks')
+  eq(
+    '带参子视图归同一页且抽出参数',
+    [open('/tasks/sign/config').route.value.name, open('/tasks/sign/config').route.value.params],
+    ['tasks', { name: 'sign' }],
+  )
+  eq('更具体的模式优先（/tasks/config 不被 :name 吃掉）', open('/tasks/config').route.value.params, {})
+  eq('老地址归同一页', open('/logs').route.value.name, 'history')
+  eq('两个地址都归 history', [open('/history').route.value.name, open('/logs').route.value.name], ['history', 'history'])
+
+  eq('href：无参数 ⇒ 用无参数的那个模式', open('/').href('tasks'), '/tasks')
+  eq('href：给了参数 ⇒ 自动选带参数的模式', open('/').href('tasks', { name: 'sign' }), '/tasks/sign/config')
+  eq('href：参数 + 多余键 ⇒ 多余键进 query', open('/').href('tasks', { name: 'sign', tab: 'log' }), '/tasks/sign/config?tab=log')
+  eq('href：只有多余键 ⇒ 退回无参数模式', open('/').href('tasks', { tab: 'log' }), '/tasks?tab=log')
+  eq('href：多模式路由的规范地址', open('/').href('history'), '/history')
+  eq('href：参数编码', open('/').href('tasks', { name: 'a/b c' }), '/tasks/a%2Fb%20c/config')
+
+  r.navigate('tasks', { name: 'sign' })
+  eq('navigate 也走"参数决定模式"', historyCalls, [['push', '/tasks/sign/config']])
+  r.dispose()
+}
+
 live?.dispose()
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(bad ? `\n✗ ${bad} 条不符合预期` : '\n✓ 路由用例全部符合预期')

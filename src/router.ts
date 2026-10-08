@@ -50,8 +50,13 @@
  * # 有意不做
  *
  * 嵌套路由、通配符、`base`/子路径挂载（挂到 `/app/` 下要动 `index.html` 的 `<base>`，
- * 属应用与服务端的约定）、懒加载、导航守卫、滚动恢复。按"真实项目里到底用了什么"收录，
- * 以上都还没有第二个使用方。
+ * 属应用与服务端的约定）、导航守卫、滚动恢复。按"真实项目里到底用了什么"收录。
+ *
+ * **按页懒加载 chunk 也不做**（`views` 是急切的，构造时组件都已在）。原因：那需要引入
+ * "加载中 / 加载失败"两种状态与竞态处理，**属应用策略**（哪几个 chunk、转圈长什么样、
+ * 失败怎么提示），不是路由该替调用方决定的。在产项目的做法是：自己存一个
+ * `() => unknown` 的渲染闭包 + 按页缓存，`route` 只当"该渲染哪个"的输入 —— 这与
+ * `view()` 内部做的事一样，只是多了异步那一层。
  */
 
 import { createComponent, type Component } from './component'
@@ -59,22 +64,29 @@ import { ref, type ReadonlyRef } from './signal'
 
 /**
  * 从路径模板里抽出参数名：`'/tasks/:id'` → `'id'`，`'/:a/:b'` → `'a' | 'b'`。
+ * 一个路由名拥有多个模式时取**并集**。
  *
  * 用途只有一个：让 `href` / `navigate` 的**参数名写错时在编译期就报**，而不是等用户
  * 点下去才发现地址少了一截。运行时仍会再查一次（见 `href`）。
  */
-export type RouteParams<P extends string> = P extends `${string}:${infer Tail}`
-  ? Tail extends `${infer K}/${infer R}`
-    ? K | RouteParams<`/${R}`>
-    : Tail
-  : never
+export type RouteParams<P> = P extends string
+  ? P extends `${string}:${infer Tail}`
+    ? Tail extends `${infer K}/${infer R}`
+      ? K | RouteParams<`/${R}`>
+      : Tail
+    : never
+  : P extends readonly (infer S)[]
+    ? S extends string
+      ? RouteParams<S>
+      : never
+    : never
 
 /**
  * 调用方要传的参数：**路由参数必填，多出来的键自动拼成 query**。
  *
  * `Record<never, string>` 就是 `{}`，所以无参数的路由退化成"随便传"，不必特判。
  */
-export type RouteArgs<P extends string> = Record<RouteParams<P>, string> & Partial<Record<string, string>>
+export type RouteArgs<P> = Record<RouteParams<P>, string> & Partial<Record<string, string>>
 
 /** 一次匹配的结果。`name` 是路由名；匹配不到时是 `fallback` 指定的那个。 */
 export interface RouteLocation<K extends string = string> {
@@ -90,10 +102,28 @@ export interface RouteProps<K extends string = string> {
   route: RouteLocation<K>
 }
 
-export interface RouterOptions<R extends Record<string, string>> {
+/** 一个路由名对应的地址模式：单个字符串，或**多个**（第一个是 `href` 用的规范地址）。 */
+export type RoutePatterns = string | readonly string[]
+
+export interface RouterOptions<R extends Record<string, RoutePatterns>> {
   /**
-   * 路由名 → 路径模板。模板段以 `:` 开头的是参数（`/tasks/:id`）。
-   * **按声明顺序匹配，先命中者胜** —— 把更具体的放前面。
+   * 路由名 → 地址模式。模板段以 `:` 开头的是参数（`/tasks/:id`）。
+   *
+   * 一个名字可以拥有**多个**模式，第一个是 `href` 生成的规范地址、其余是"也归它"：
+   *
+   * ```ts
+   * routes: {
+   *   tasks: ['/tasks', '/tasks/config', '/tasks/:name/config'],
+   *   history: ['/history', '/logs'],        // 老地址照旧打得开
+   * }
+   * ```
+   *
+   * 为什么要这个：一页常常**不止一个地址**（子视图、改名后要兼容的老地址）。
+   * 没有它就只能把子视图拆成另一个路由名，于是 `route.name` 不再等于页面 id，
+   * 调用方得多写一层映射 —— 而那层映射正是这里想省掉的。
+   *
+   * **按声明顺序匹配，先命中者胜** —— 把更具体的放前面（`/tasks/config` 要排在
+   * `/tasks/:name` 之前，否则 `config` 会被当成任务名）。
    */
   routes: R
   /** 匹配不到时用哪个路由名。必须是 `routes` 的键。 */
@@ -105,16 +135,21 @@ export interface RouterOptions<R extends Record<string, string>> {
   views?: { [K in keyof R]: Component<RouteProps<K & string>> }
 }
 
-export interface Router<R extends Record<string, string>> {
+export interface Router<R extends Record<string, RoutePatterns>> {
   /** 当前位置。**只读**：它是地址的副本，写它不会改地址（单一真源是 `location`）。 */
   readonly route: ReadonlyRef<RouteLocation<keyof R & string>>
   /** 跳到某个路由。已在目标地址上时**什么都不做**（不污染历史栈）。 */
   navigate<K extends keyof R & string>(name: K, args?: RouteArgs<R[K]>, opts?: { replace?: boolean }): void
-  /** 生成链接。路由参数填 `:名字`，**剩下的键拼成 query**。 */
+  /**
+   * 生成链接。路由参数填 `:名字`，**剩下的键拼成 query**。
+   * 一个路由名有多个模式时，由**参数**决定用哪个（挑第一个参数给齐的）——
+   * 所以 `href('tasks')` 得 `/tasks`、`href('tasks', { name })` 得 `/tasks/<name>/config`。
+   */
   href<K extends keyof R & string>(name: K, args?: RouteArgs<R[K]>): string
   /**
    * 当前路由对应的页面节点。用法：`{router.view()}`。
    * ⚠ 必须写在**动态子节点位置**（也就是 `{…}` 里）；写成静态子节点会静默不生效。
+   * ⚠ `views` 是**急切**的：组件在构造时就都已加载。要按页懒加载 chunk，见文件头"有意不做"。
    */
   view(): unknown
   /** 摘掉 `popstate` 监听。测试与热替换用。 */
@@ -125,6 +160,11 @@ export interface Router<R extends Record<string, string>> {
 interface Compiled {
   re: RegExp
   keys: string[]
+}
+
+/** 把 `string | string[]` 统一成数组。 */
+function toPatterns(v: RoutePatterns): readonly string[] {
+  return typeof v === 'string' ? [v] : v
 }
 
 /**
@@ -162,11 +202,19 @@ function safeDecode(s: string): string {
   }
 }
 
-export function createRouter<R extends Record<string, string>>(opts: RouterOptions<R>): Router<R> {
+/** 模式里 `:param` 的名字，按出现顺序。 */
+function paramNames(pattern: string): string[] {
+  return pattern
+    .split('/')
+    .filter((s) => s.startsWith(':'))
+    .map((s) => s.slice(1))
+}
+
+export function createRouter<R extends Record<string, RoutePatterns>>(opts: RouterOptions<R>): Router<R> {
   const routes = opts.routes
   const names = Object.keys(routes) as (keyof R & string)[]
-  const compiled = new Map<string, Compiled>()
-  for (const n of names) compiled.set(n, compile(routes[n]))
+  const compiled = new Map<string, Compiled[]>()
+  for (const n of names) compiled.set(n, toPatterns(routes[n]).map(compile))
 
   const views = opts.views
   if (views) {
@@ -183,12 +231,14 @@ export function createRouter<R extends Record<string, string>>(opts: RouterOptio
       if (!(k in query)) query[k] = v
     })
     for (const name of names) {
-      const c = compiled.get(name)!
-      const m = c.re.exec(pathname)
-      if (!m) continue
-      const params: Record<string, string> = {}
-      for (let i = 0; i < c.keys.length; i++) params[c.keys[i]] = safeDecode(m[i + 1])
-      return { name, path: pathname, params, query }
+      // 一个名字可能拥有多个模式（子视图、老地址）；按声明顺序试，先命中者胜
+      for (const c of compiled.get(name)!) {
+        const m = c.re.exec(pathname)
+        if (!m) continue
+        const params: Record<string, string> = {}
+        for (let i = 0; i < c.keys.length; i++) params[c.keys[i]] = safeDecode(m[i + 1])
+        return { name, path: pathname, params, query }
+      }
     }
     return { name: opts.fallback, path: pathname, params: {}, query }
   }
@@ -196,13 +246,35 @@ export function createRouter<R extends Record<string, string>>(opts: RouterOptio
   const route = ref<RouteLocation<keyof R & string>>(parse(location.pathname, location.search))
 
   function href<K extends keyof R & string>(name: K, args?: RouteArgs<R[K]>): string {
-    const pattern = routes[name] as string | undefined
+    const pats = routes[name]
     // 拼一个不存在的路由名是**写错了**：地址栏会变成死链接，而问题要到用户点下去才现形
-    if (pattern === undefined) throw new Error(`router: 没有名为 "${name}" 的路由`)
-
+    if (pats === undefined) throw new Error(`router: 没有名为 "${name}" 的路由`)
+    const list = toPatterns(pats)
     const bag = (args ?? {}) as Record<string, string>
+
+    /**
+     * **参数决定用哪个模式**：在"它要的参数都给齐了"的那些里挑**参数最多**的（更具体的
+     * 优先），并列时按声明顺序。
+     *
+     * 于是 `href('tasks')` → `/tasks`，而 `href('tasks', { name })` → `/tasks/<name>/config`
+     * —— 调用方不必记住"第几个模式是详情页"，也不会因为模式顺序调整而悄悄生成错链接。
+     *
+     * ⚠ 判据必须是"参数最多"而不是"第一个合格的"：无参数的模式（`/tasks`）**永远合格**，
+     * 按顺序取就永远轮不到带参数的那个。
+     */
+    let chosen = list[0]
+    let best = -1
+    for (const p of list) {
+      const keys = paramNames(p)
+      if (!keys.every((k) => bag[k] !== undefined)) continue
+      if (keys.length > best) {
+        best = keys.length
+        chosen = p
+      }
+    }
+
     const used = new Set<string>()
-    const path = pattern
+    const path = chosen
       .split('/')
       .map((seg) => {
         if (!seg.startsWith(':')) return seg
